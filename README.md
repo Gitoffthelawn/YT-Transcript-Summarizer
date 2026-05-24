@@ -6,7 +6,7 @@ The project ships as two complementary clients that share the same transcript-ex
 
 | Client | Best for | Folder |
 |--------|----------|--------|
-| **Browser extension** (Chrome / Firefox) | Desktop, power users, batch processing | [`web_extension/`](web_extension/) |
+| **Browser extension** (Chrome / Firefox) | Desktop, power users, batch processing | [`web_extension/`](web_extension/) — [Install on Firefox ↗](https://addons.mozilla.org/it/firefox/addon/yt-transcript-summarizer/) |
 | **Progressive web app** | Mobile, quick one-off summaries | [`web_app/`](web_app/) |
 
 ---
@@ -100,7 +100,9 @@ YT-Transcript-Summarizer/
 
 ### Extension
 
-See [`web_extension/README.md`](web_extension/README.md) for installation instructions (Firefox AMO, Chrome unpacked, Firefox manual).
+Firefox users can install directly from the [Firefox Add-ons page](https://addons.mozilla.org/it/firefox/addon/yt-transcript-summarizer/).
+
+For Chrome or manual Firefox installation see [`web_extension/README.md`](web_extension/README.md).
 
 ### Web app
 

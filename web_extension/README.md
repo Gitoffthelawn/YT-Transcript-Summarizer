@@ -94,7 +94,7 @@ Toggle dark/light theme from the header. Preference is saved.
 
 ### Firefox (AMO)
 
-Install directly from [Firefox Add-ons](https://addons.mozilla.org) — search for **YT Transcript Summarizer**. Requires Firefox 128+.
+Install directly from the [Firefox Add-ons page](https://addons.mozilla.org/it/firefox/addon/yt-transcript-summarizer/). Requires Firefox 128+.
 
 ### Chrome / Chromium (unpacked)
 

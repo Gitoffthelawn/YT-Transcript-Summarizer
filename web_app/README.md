@@ -2,7 +2,7 @@
 
 Mobile-first Progressive Web App (PWA) for extracting YouTube transcripts and preparing AI summaries. Designed for quick, on-the-go use from a smartphone.
 
-Part of the [YT Transcript Summarizer](../README.md) project. For the desktop browser extension see [`../web_extension/`](../web_extension/).
+Part of the [YT Transcript Summarizer](../README.md) project. For the desktop browser extension see [`../web_extension/`](../web_extension/) — Firefox users can install it directly from the [Firefox Add-ons page](https://addons.mozilla.org/it/firefox/addon/yt-transcript-summarizer/).
 
 ---
 
