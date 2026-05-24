@@ -157,6 +157,17 @@ export default function Home() {
           Extract transcripts and generate AI summaries effortlessly on mobile.
         </p>
         <p className="text-xs text-[var(--foreground)] opacity-30 mt-1">v{APP_VERSION}</p>
+        <p className="text-xs text-[var(--foreground)] opacity-40 mt-1">
+          Made with ❤️ by{" "}
+          <a
+            href="https://github.com/RobertoReale"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-purple-500 dark:text-purple-400 hover:opacity-75 transition-opacity"
+          >
+            Roberto Reale
+          </a>
+        </p>
       </div>
 
       <div className="w-full flex flex-col gap-6 animate-in fade-in zoom-in-95 duration-500 delay-150 fill-mode-both">

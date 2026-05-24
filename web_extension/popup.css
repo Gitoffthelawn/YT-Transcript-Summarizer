@@ -544,6 +544,25 @@ body.dark .btn-donate {
 }
 body.dark .btn-donate:hover { background: rgba(96,165,250,0.1); border-color: rgba(96,165,250,0.55); }
 
+/* ── Credits ── */
+.credits-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+.credits-link {
+  color: #7c3aed;
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: 3px;
+  transition: opacity 0.15s;
+}
+.credits-link:hover { opacity: 0.75; text-decoration: underline; }
+body.dark .credits-link { color: #a78bfa; }
+
 /* ── Chips separator ── */
 .chips-sep {
   width: 1px;
