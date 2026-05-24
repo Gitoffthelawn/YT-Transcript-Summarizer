@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT Transcript Summarizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <rect width="28" height="28" rx="8" fill="url(#g1)"/>
+      <path d="M11 9.5l8 4.5-8 4.5V9.5z" fill="white"/>
+      <defs>
+        <linearGradient id="g1" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#7c3aed"/>
+          <stop offset="100%" stop-color="#2563eb"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <span>YT Summarizer</span>
+    <span id="app-version" class="app-version"></span>
+  </div>
+  <div class="header-actions">
+    <button id="btn-theme" class="icon-btn" title="Toggle theme">🌙</button>
+    <button id="btn-history" class="icon-btn" title="Video history">📋</button>
+    <button id="btn-tts" class="icon-btn" title="Text-to-Speech">🔊</button>
+    <button id="btn-settings" class="icon-btn" title="Advanced settings">⚙️</button>
+  </div>
+</div>
+
+<!-- Provider bar -->
+<div class="provider-bar">
+  <div class="provider-tabs" id="provider-tabs">
+    <button class="provider-tab" data-provider="anthropic">Claude</button>
+    <button class="provider-tab" data-provider="openai">OpenAI</button>
+    <button class="provider-tab" data-provider="gemini">Gemini</button>
+    <button class="provider-tab" data-provider="openrouter">OpenRouter</button>
+    <button class="provider-tab" data-provider="custom">Custom</button>
+  </div>
+</div>
+
+<!-- Advanced settings panel: language, model, API key -->
+<div id="panel-settings" class="panel hidden">
+  <div class="panel-header">
+    <button class="panel-back-btn" id="btn-back-settings">← Back</button>
+    <span class="panel-title">Advanced Settings</span>
+  </div>
+  <div class="field">
+    <label>🌐 Transcript Language</label>
+    <select id="transcript-lang-select">
+      <option value="en">🇬🇧 English (preferred)</option>
+      <option value="it">🇮🇹 Italiano (preferred)</option>
+      <option value="es">🇪🇸 Español (preferred)</option>
+      <option value="auto">🌐 Auto (first available)</option>
+    </select>
+  </div>
+  <div class="field">
+    <label>🤖 Model <span class="label-note">— API mode only</span></label>
+    <select id="model-select">
+      <option value="claude-sonnet-4-6">claude-sonnet-4-6 (Recommended)</option>
+      <option value="claude-opus-4-7">claude-opus-4-7 (Most capable)</option>
+      <option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet</option>
+      <option value="claude-3-5-sonnet-latest">claude-3-5-sonnet</option>
+    </select>
+    <input type="text" id="custom-model-input" placeholder="e.g. llama3, phi3, mistral" autocomplete="off" class="hidden" style="margin-top:6px">
+  </div>
+  <div class="field">
+    <label id="api-key-label">🔑 API Key <span class="label-note">— required for API mode</span></label>
+    <div class="row-input">
+      <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off">
+      <button id="btn-save-key" class="btn-sm">Save</button>
+    </div>
+  </div>
+  <div class="field hidden" id="field-custom-endpoint">
+    <label>🔗 Endpoint URL</label>
+    <input type="text" id="custom-endpoint" placeholder="http://localhost:11434/v1/chat/completions" autocomplete="off">
+  </div>
+</div>
+
+<!-- History panel -->
+<div id="panel-history" class="panel hidden">
+  <div class="panel-header">
+    <button class="panel-back-btn" id="btn-back-history">← Back</button>
+    <span class="panel-title">📋 Video History</span>
+    <button id="btn-clear-history" class="btn-sm">Clear</button>
+  </div>
+  <div id="history-list" class="history-list">
+    <div class="empty-state">No videos processed yet.</div>
+  </div>
+</div>
+
+<!-- TTS panel -->
+<div id="panel-tts" class="panel hidden">
+  <div class="panel-header">
+    <button class="panel-back-btn" id="btn-back-tts">← Back</button>
+    <span class="panel-title">🔊 Text-to-Speech</span>
+  </div>
+  <div class="field">
+    <label>Text to read</label>
+    <textarea id="tts-text" rows="4" placeholder="Paste the text you want to read aloud…"></textarea>
+  </div>
+  <div class="field">
+    <label>🎤 Voice</label>
+    <select id="tts-voice"><option value="">Default</option></select>
+  </div>
+  <div class="field tts-speed-row">
+    <label>Speed <span class="tts-rate-badge" id="tts-rate-label">1.0×</span></label>
+    <input type="range" id="tts-rate" min="0.5" max="2" step="0.1" value="1">
+  </div>
+  <div class="tts-controls">
+    <button id="tts-btn-play" class="btn-sm accent tts-play-btn">▶ Play</button>
+    <button id="tts-btn-pauseresume" class="btn-sm tts-icon-btn" disabled title="Pause / Resume">⏸</button>
+    <button id="tts-btn-stop" class="btn-sm tts-icon-btn" disabled title="Stop">■</button>
+    <span id="tts-status-text" class="tts-status-text"></span>
+  </div>
+</div>
+
+<div id="main-view">
+
+<!-- Video Queue -->
+<div class="section">
+  <div class="section-title">Video Queue</div>
+  <div class="add-row">
+    <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=..." class="url-input">
+    <button id="btn-add" class="btn-sm accent">+</button>
+    <button id="btn-add-tab" class="btn-sm" title="Add current YouTube tab">📌</button>
+  </div>
+  <div id="job-list" class="job-list">
+    <div class="empty-state">Add a URL or open a YouTube video and click 📌</div>
+  </div>
+</div>
+
+<!-- Inline Options Bar: mode + contextual toggles -->
+<div class="options-bar">
+  <div class="mode-tabs" id="mode-tabs">
+    <button class="mode-tab" data-mode="web">🌐 Web</button>
+    <button class="mode-tab" data-mode="transcript">📄 Transcript</button>
+    <button class="mode-tab" data-mode="api">🤖 API</button>
+  </div>
+  <div class="chips-row" id="inline-chips">
+    <button class="chip chip-fmt" id="chip-fmt-chat" data-fmt="chat">💬 Chat</button>
+    <button class="chip chip-fmt" id="chip-fmt-md" data-fmt="md">📄 .md</button>
+    <span class="chips-sep"></span>
+    <button class="chip chip-len" id="chip-len-short" data-len="short">📝 Short</button>
+    <button class="chip chip-len" id="chip-len-normal" data-len="normal">📄 Normal</button>
+    <button class="chip chip-len" id="chip-len-long" data-len="long">📖 Long</button>
+    <span class="chips-sep"></span>
+    <select id="lang-select-inline" class="lang-select-inline" title="Transcript language">
+      <option value="en">🇬🇧 EN</option>
+      <option value="it">🇮🇹 IT</option>
+      <option value="es">🇪🇸 ES</option>
+      <option value="auto">🌐 Auto</option>
+    </select>
+    <span class="chips-sep"></span>
+    <button class="chip" id="chip-autopaste" data-cb="autopaste-cb">📋 Auto-paste</button>
+    <button class="chip" id="chip-autosubmit" data-cb="autosubmit-cb">↵ Auto-submit</button>
+    <button class="chip" id="chip-save-file" data-cb="save-file-cb" title="Save transcript .txt to Downloads folder">💾 Save .txt</button>
+    <button class="chip" id="chip-thinking" data-cb="thinking-cb">🧠 Thinking</button>
+    <button class="chip" id="chip-combine" data-cb="combined-prompt-cb" title="Send all video transcripts as a single combined message">📎 Combine all</button>
+  </div>
+</div>
+
+<!-- Hidden state mirrors (read by saveSettings) -->
+<select id="provider-select" style="display:none">
+  <option value="anthropic">anthropic</option>
+  <option value="openai">openai</option>
+  <option value="gemini">gemini</option>
+  <option value="openrouter">openrouter</option>
+  <option value="custom">custom</option>
+</select>
+<select id="mode-select" style="display:none">
+  <option value="web">web</option>
+  <option value="transcript">transcript</option>
+  <option value="api">api</option>
+</select>
+<input type="checkbox" id="autopaste-cb" style="display:none">
+<input type="checkbox" id="autosubmit-cb" style="display:none">
+<input type="checkbox" id="save-file-cb" style="display:none">
+<input type="checkbox" id="combined-prompt-cb" style="display:none">
+<input type="checkbox" id="thinking-cb" style="display:none">
+
+<div class="prompt-section" id="prompt-section">
+  <button class="prompt-header" id="btn-prompt-toggle">
+    <span class="prompt-header-label">✎ Prompt</span>
+    <span class="prompt-header-preview" id="prompt-header-preview"></span>
+    <span class="prompt-header-arrow">▾</span>
+  </button>
+  <div class="prompt-editor hidden" id="prompt-editor">
+    <textarea id="prompt-input" rows="3" placeholder="Write the prompt to send along with the transcript..."></textarea>
+  </div>
+</div>
+
+<div class="footer">
+  <div id="progress-wrap" class="progress-wrap hidden">
+    <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+    <span id="progress-label" class="progress-label">0/0</span>
+  </div>
+  <div class="btn-row">
+    <button id="btn-run" class="btn-run">▶ START PROCESSING</button>
+    <button id="btn-reset" class="btn-reset hidden" title="Force reset stuck jobs">⏹</button>
+  </div>
+  <div class="donate-row">
+    <button id="btn-donate" class="btn-donate">☕ Buy me a coffee — keep this extension free</button>
+  </div>
+</div>
+
+</div><!-- /#main-view -->
+
+<script type="module" src="popup.js"></script>
+</body>
+</html>

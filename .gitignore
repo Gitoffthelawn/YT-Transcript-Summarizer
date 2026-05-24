@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Web app — Next.js
+web app/.next/
+web app/out/
+web app/node_modules/
+web app/.env
+web app/.env.local
+web app/.env.*.local
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,238 @@
+# YT Transcript Summarizer (Web Extension)
+
+A browser extension (Chrome/Firefox) that extracts transcripts from YouTube videos and summarizes them using your AI of choice — Claude, ChatGPT, Gemini, OpenRouter, or any local OpenAI-compatible model.
+
+---
+
+## Features at a glance
+
+- **5 AI providers** — Anthropic Claude, OpenAI, Google Gemini, OpenRouter, and custom/local endpoints
+- **3 operating modes** — Web (paste into the AI chat UI), Transcript Only (download raw text), API (call the AI directly)
+- **Batch queue** — add multiple YouTube URLs and process them all at once
+- **Per-video settings** — override format and summary length for each video individually
+- **Summary length** — Short, Normal, or Long presets, each with English and Italian prompts
+- **Output format** — Markdown (`.md`) or plain Chat format
+- **Reliable extraction** — four fallback strategies to handle YouTube's PO Token restrictions
+- **Combine all** — merge all queued transcripts into a single AI prompt
+- **Thinking mode** — extended reasoning for supported Claude models
+- **Video history** — log of all processed videos with timestamps and links
+- **Text-to-Speech** — read any text aloud directly from the popup, with voice and speed selection
+- **Dark / Light theme**
+- **Language preference** — prefer English, Italian, Spanish, or auto-detect transcript language
+
+---
+
+## Providers
+
+Select your provider from the tab bar at the top of the popup. Each provider has its own API key and model selection stored separately.
+
+| Provider | Web mode | API mode | Notes |
+|----------|----------|----------|-------|
+| **Anthropic Claude** | Claude.ai | ✅ | Supports Thinking mode |
+| **OpenAI** | ChatGPT | ✅ | |
+| **Google Gemini** | Gemini | ✅ | |
+| **OpenRouter** | — | ✅ | Aggregates many models |
+| **Custom** | — | ✅ | Any OpenAI-compatible endpoint (e.g. Ollama) |
+
+---
+
+## Modes
+
+| Mode | What it does |
+|------|-------------|
+| **🌐 Web** | Downloads the transcript as `.txt`, opens the provider's chat UI, and optionally auto-pastes and auto-submits the prompt |
+| **📄 Transcript** | Downloads the raw transcript as `.txt` — no AI involved |
+| **🤖 API** | Calls the AI API directly and saves the summary as a `.md` file |
+
+---
+
+## Summary options
+
+### Format
+
+| Chip | Output |
+|------|--------|
+| **💬 Chat** | Plain prose, optimised for pasting into a chat UI |
+| **📄 .md** | Markdown with headings, lists, and structure (default) |
+
+### Length
+
+| Chip | Prompt behavior |
+|------|----------------|
+| **📝 Short** | Key takeaways only |
+| **📄 Normal** | Complete and detailed, nothing omitted (default) |
+| **📖 Long** | In-depth, structured with headings, every section covered |
+
+Switching format or length automatically updates the prompt with the correct preset for your language (English, Italian, or Spanish). You can still edit the prompt manually.
+
+### Per-video settings
+
+Click **✎** on any queued job to expand its settings panel. You can override the format, length, and prompt individually for that video. The **✎** button turns purple when custom settings are active. Click **↺ reset** to revert to global settings.
+
+---
+
+## Other features
+
+### 📋 Video history
+Click the **📋** button in the header to view a log of all videos processed, with title, URL, and timestamp. Click any entry to open the video.
+
+### 🧠 Thinking mode
+Available in API mode for supported Claude models (`claude-sonnet-4-6`, `claude-opus-4-7`, `claude-3-7-sonnet`). Enables extended reasoning before the summary.
+
+### 📎 Combine all
+When enabled, all queued transcripts are merged into a single prompt and sent as one request — useful for comparing or cross-referencing multiple videos.
+
+### 🔊 Text-to-Speech
+Click **🔊** in the header to open the TTS panel. Paste any text, select a voice, adjust speed (0.5×–2×), and hit **▶ Play**. You can change the speed while audio is playing; the new rate takes effect from the next passage. Supports pause and stop. Playback state persists across popup open/close.
+
+### 🌙 / ☀️ Theme
+Toggle dark/light theme from the header. Preference is saved.
+
+---
+
+## Installation
+
+### Firefox (AMO)
+
+Install directly from [Firefox Add-ons](https://addons.mozilla.org) — search for **YT Transcript Summarizer**. Requires Firefox 128+.
+
+### Chrome / Chromium (unpacked)
+
+1. Download or clone this repository
+2. Open `chrome://extensions`
+3. Enable **Developer mode** (top-right toggle)
+4. Click **Load unpacked** and select this folder
+
+### Firefox (manual / temporary)
+
+1. Download or clone this repository
+2. Open `about:debugging#/runtime/this-firefox`
+3. Click **Load Temporary Add-on…** and select `manifest.json`
+
+> Temporary add-ons are removed on Firefox restart. For a persistent install, use AMO or sign the extension with [web-ext](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/).
+
+---
+
+## Usage
+
+1. Click the extension icon to open the popup
+2. Select your **provider** from the tab bar
+3. Select your **mode** (Web / Transcript / API)
+4. Choose **format** and **length** from the chips row
+5. Add YouTube URLs manually or click **📌** while on a YouTube tab
+6. *(Optional)* Click **✎** on individual jobs to override their settings
+7. Click **▶ START PROCESSING**
+
+### API mode setup
+
+1. Open **Advanced Settings** (⚙️ button in the header)
+2. Paste your API key in the **API Key** field and click **Save**
+3. Select your model from the dropdown
+
+API keys are stored locally in browser storage and are only ever sent to the respective provider's API endpoint.
+
+### Web mode auto-paste / auto-submit
+
+Enable **📋 Auto-paste** to have the transcript automatically pasted into the chat input when the AI tab opens. Enable **↵ Auto-submit** to also press Send (implies auto-paste).
+
+Auto-paste is supported for Claude.ai, ChatGPT, and Gemini via dedicated content scripts.
+
+### Custom / local endpoint
+
+Select **Custom** as the provider, enter your endpoint URL (e.g. `http://localhost:11434/v1/chat/completions` for Ollama) in Advanced Settings, and type the model name in the model field.
+
+---
+
+## Transcript extraction
+
+The extension tries four strategies in order, falling back to the next if one fails:
+
+1. **InnerTube Android Player API** — uses the Android client context to bypass PO Token restrictions
+2. **Watch page + `get_transcript` endpoint** — downloads the watch page to extract caption URLs, then falls back to the InnerTube `get_transcript` API
+3. **Legacy Timedtext API** — calls the `/api/timedtext` endpoint directly
+4. **Real tab fallback** — opens the video in a background tab and reads the transcript from the page (reuses an existing tab if the video is already open)
+
+If all four strategies fail, a `debug_<videoId>.txt` file is downloaded with full diagnostic output.
+
+---
+
+## Supported models
+
+**Anthropic Claude**
+- `claude-sonnet-4-6` (recommended)
+- `claude-opus-4-7` (most capable)
+- `claude-3-7-sonnet`
+- `claude-3-5-sonnet`
+
+**OpenAI**
+- `gpt-4o` (recommended)
+- `gpt-4o-mini`
+- `o1`, `o1-mini`
+- `gpt-4-turbo`
+
+**Google Gemini**
+- `gemini-2.0-flash` (recommended)
+- `gemini-1.5-pro`
+- `gemini-1.5-flash`
+
+**OpenRouter** — any model available on openrouter.ai (defaults provided as a starting point)
+
+**Custom** — any OpenAI-compatible model; type the model name manually
+
+---
+
+## Permissions
+
+| Permission | Reason |
+|------------|--------|
+| `storage` | Save settings, API keys, job queue, and history locally |
+| `tabs` | Read current tab URL; open provider chat tabs |
+| `scripting` | Run transcript extraction in YouTube tabs (fallback strategy) |
+| `downloads` | Save transcript and summary files |
+| `notifications` | Notify when batch processing completes |
+| `alarms` | Keep the service worker alive during long-running jobs |
+| `offscreen` | Text-to-Speech audio playback via Web Speech API |
+
+---
+
+## Files
+
+```
+manifest.json           Extension manifest (Manifest V3)
+background.js           Service worker: transcript extraction, API calls, TTS routing
+popup.html              Extension popup UI
+popup.css               Popup styles (light + dark theme)
+popup.js                Popup orchestrator: init, port, job CRUD, batch runner
+claude_paste.js         Content script: auto-paste into Claude.ai
+chatgpt_paste.js        Content script: auto-paste into ChatGPT
+gemini_paste.js         Content script: auto-paste into Gemini
+tts_offscreen.html      Offscreen document for Web Speech API audio playback
+logo.png                Extension icon
+modules/
+  config.js             Providers, prompts, YouTube API config
+  llm-api.js            AI provider integrations
+  youtube-api.js        Transcript extraction strategies (4 strategies)
+  popup-state.js        Shared mutable state object for popup modules
+  popup-history.js      History panel logic
+  popup-tts.js          TTS panel logic
+  popup-render.js       Job rendering, chips, per-job settings UI
+  popup-settings.js     Provider/settings panel logic
+  ui-utils.js           escHtml, showMsg
+  utils.js              sleep, fetchWithTimeout, findInObject
+```
+
+---
+
+## Known compatibility issues
+
+### Duplicate-tab prevention extensions
+
+Extensions like *Prevent Duplicate Tabs* can block Strategy 4 (tab fallback) from opening a YouTube background tab. The extension already minimises this by reusing an open tab for the video if one exists — so the conflict only occurs when Strategies 1–3 all failed **and** the video isn't already open in a tab.
+
+**Fix:** add `youtube.com` to the allowlist of the duplicate-tab extension.
+
+---
+
+## License
+
+MIT
