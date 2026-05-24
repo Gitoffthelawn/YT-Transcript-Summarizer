@@ -2,6 +2,13 @@
 .DS_Store
 Thumbs.db
 
+# AI agent instruction files (not part of the project)
+AGENTS.md
+CLAUDE.md
+.cursorrules
+.windsurfrules
+GEMINI.md
+
 # Editor
 .vscode/
 .idea/
