@@ -33,6 +33,14 @@ function writeCache(videoId: string, transcript: string, title: string, strategy
   } catch {}
 }
 
+type CacheChoice = {
+  url: string;
+  provider: string;
+  length: string;
+  lang: string;
+  cached: { transcript: string; title: string; strategy: string };
+};
+
 export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +50,7 @@ export default function Home() {
   const [history, setHistory] = useState<{ url: string; title: string; date: string }[]>([]);
   const [selectedUrl, setSelectedUrl] = useState<string | undefined>(undefined);
   const [copiedDebug, setCopiedDebug] = useState(false);
+  const [pendingCacheChoice, setPendingCacheChoice] = useState<CacheChoice | null>(null);
 
   useEffect(() => {
     try {
@@ -61,23 +70,21 @@ export default function Home() {
     }
   }, [theme]);
 
-  const handleExtract = async (url: string, provider: string, length: string, lang: string) => {
+  const handleExtract = async (url: string, provider: string, length: string, lang: string, forceRefresh = false) => {
     setIsLoading(true);
     setError(null);
     setDebugLogs([]);
     setPromptReady(null);
+    setPendingCacheChoice(null);
 
     try {
       const videoId = extractVideoId(url);
 
-      // Check cache first
-      if (videoId) {
+      if (videoId && !forceRefresh) {
         const cached = readCache(videoId);
         if (cached) {
-          const promptInstruction = getPreset(lang, "chat", length);
-          const fullPrompt = `${promptInstruction}\n\n---\n\n${cached.transcript}`;
-          setPromptReady({ text: fullPrompt, provider, strategy: `${cached.strategy} (cached)` });
           setIsLoading(false);
+          setPendingCacheChoice({ url, provider, length, lang, cached });
           return;
         }
       }
@@ -120,6 +127,34 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleUseCached = () => {
+    if (!pendingCacheChoice) return;
+    const { url, provider, length, lang, cached } = pendingCacheChoice;
+    const promptInstruction = getPreset(lang, "chat", length);
+    const fullPrompt = `${promptInstruction}\n\n---\n\n${cached.transcript}`;
+    setPromptReady({ text: fullPrompt, provider, strategy: `${cached.strategy} (cached)` });
+    setPendingCacheChoice(null);
+    const videoId = extractVideoId(url);
+    if (videoId) {
+      setHistory(prev => {
+        const newEntry = { url, title: cached.title, date: new Date().toISOString() };
+        let updated = [...prev];
+        const idx = updated.findIndex(h => h.url === url);
+        if (idx >= 0) updated[idx] = newEntry;
+        else updated.unshift(newEntry);
+        localStorage.setItem('videoHistory', JSON.stringify(updated));
+        return updated;
+      });
+    }
+  };
+
+  const handleRefetch = () => {
+    if (!pendingCacheChoice) return;
+    const { url, provider, length, lang } = pendingCacheChoice;
+    setPendingCacheChoice(null);
+    handleExtract(url, provider, length, lang, true);
   };
 
   return (
@@ -172,6 +207,42 @@ export default function Home() {
 
       <div className="w-full flex flex-col gap-6 animate-in fade-in zoom-in-95 duration-500 delay-150 fill-mode-both">
         <TranscriptForm onSubmit={handleExtract} isLoading={isLoading} selectedUrl={selectedUrl} />
+
+        {pendingCacheChoice && (
+          <div className="glass rounded-3xl p-5 flex flex-col gap-4 border border-white/10 animate-in fade-in slide-in-from-bottom-4 duration-300">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-[var(--foreground)]">Cached transcript found</p>
+                <p className="text-xs text-[var(--foreground)] opacity-50 truncate">{pendingCacheChoice.cached.title}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleUseCached}
+                className="flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-semibold bg-brand-600 hover:bg-brand-700 active:scale-[0.98] text-white transition-all shadow-lg shadow-brand-500/25"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Use cached
+              </button>
+              <button
+                onClick={handleRefetch}
+                className="flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-semibold bg-[var(--card-bg)] hover:bg-[var(--card-border)]/60 active:scale-[0.98] text-[var(--foreground)] border border-[var(--card-border)] transition-all"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Re-fetch
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 p-4 rounded-2xl text-sm border border-red-200 dark:border-red-900/50 animate-in fade-in">
