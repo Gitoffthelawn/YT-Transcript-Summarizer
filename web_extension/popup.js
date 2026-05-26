@@ -8,6 +8,29 @@ import { renderJobs, updateJob, setUIAsRunning, setUIAsStopped, setMode, setChip
 
 const PANELS = ['panel-settings', 'panel-history', 'panel-tts'];
 
+let countdownInterval = null;
+
+function startCountdown(nextJobAt) {
+  clearInterval(countdownInterval);
+  const bar = document.getElementById('countdown-bar');
+  const text = document.getElementById('countdown-text');
+  if (!bar || !text) return;
+  bar.classList.remove('hidden');
+  function tick() {
+    const rem = Math.max(0, Math.ceil((nextJobAt - Date.now()) / 1000));
+    text.textContent = `Next video in ${rem}s`;
+    if (rem === 0) { clearInterval(countdownInterval); bar.classList.add('hidden'); }
+  }
+  tick();
+  countdownInterval = setInterval(tick, 1000);
+}
+
+function stopCountdown() {
+  clearInterval(countdownInterval);
+  countdownInterval = null;
+  document.getElementById('countdown-bar')?.classList.add('hidden');
+}
+
 function closeAllPanels() {
   PANELS.forEach(id => document.getElementById(id).classList.add('hidden'));
   document.getElementById('main-view').classList.remove('hidden');
@@ -60,6 +83,11 @@ async function init() {
 
   if (savedJobs) state.jobs = savedJobs;
   if (savedRunning) state.running = savedRunning;
+
+  if (savedRunning) {
+    const { nextJobAt } = await chrome.storage.local.get('nextJobAt');
+    if (nextJobAt && nextJobAt > Date.now()) startCountdown(nextJobAt);
+  }
 
   if (!savedRunning && state.jobs.some(j => j.status === 'done')) {
     state.jobs = state.jobs.filter(j => j.status !== 'done');
@@ -314,7 +342,10 @@ function connectPort() {
           const el = document.querySelector(`.job-title[data-job-id="${msg.jobId}"]`);
           if (el) { el.textContent = msg.title; el.classList.remove('loading'); }
         }
+      } else if (msg.type === 'countdown') {
+        startCountdown(msg.nextJobAt);
       } else if (msg.type === 'batchDone') {
+        stopCountdown();
         state.running = false;
         chrome.storage.local.set({ running: false });
         setUIAsStopped();
@@ -505,10 +536,11 @@ async function fetchVideoTitle(url) {
 }
 
 async function resetBatch() {
+  stopCountdown();
   state.jobs = state.jobs.map(j =>
     j.status === 'active' ? { ...j, status: 'error', statusText: '❌ Interrupted' } : j
   );
-  await chrome.storage.local.set({ jobs: state.jobs, running: false });
+  await chrome.storage.local.set({ jobs: state.jobs, running: false, nextJobAt: null, nextJobFromIndex: null });
 
   const p = ensurePort();
   if (p) { try { p.postMessage({ type: 'resetState' }); } catch (_) {} }

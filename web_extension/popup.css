@@ -496,6 +496,12 @@ body.dark .chip.on {
   margin-bottom: 10px;
 }
 .progress-wrap.hidden { display: none; }
+.countdown-bar {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  padding: 0 0 8px;
+}
 .progress-bar {
   flex: 1;
   height: 4px;

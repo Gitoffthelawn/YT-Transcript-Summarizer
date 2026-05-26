@@ -7,8 +7,28 @@ import { sleep } from './modules/utils.js';
 let popupPort = null;
 let isRunning = false;
 
-// Required in MV3 to keep the service worker alive during processing
-chrome.alarms.onAlarm.addListener(() => {});
+// Resume batch if service worker was restarted mid-batch
+chrome.storage.local.get(['running', 'nextJobFromIndex', 'nextJobAt']).then(({ running, nextJobFromIndex, nextJobAt }) => {
+  if (!running || isRunning) return;
+  if (nextJobAt && Date.now() < nextJobAt) {
+    // Still in the delay window — recreate alarm for the remaining time
+    const ms = nextJobAt - Date.now();
+    chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
+  } else {
+    isRunning = true;
+    runBatch(nextJobFromIndex ?? 0);
+  }
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== 'nextJob') return;
+  chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
+    if (running && !isRunning) {
+      isRunning = true;
+      runBatch(nextJobFromIndex ?? 0);
+    }
+  });
+});
 
 // ── TTS Offscreen ─────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender) => {
@@ -39,12 +59,20 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener(async (msg) => {
     if (msg.type === 'startBatch') {
-      await chrome.storage.local.set({ jobs: msg.jobs, settings: msg.settings });
-      if (!isRunning) runBatch();
+      chrome.alarms.clear('nextJob');
+      await chrome.storage.local.set({
+        jobs: msg.jobs, settings: msg.settings,
+        nextJobFromIndex: null, nextJobAt: null
+      });
+      if (!isRunning) {
+        isRunning = true;
+        runBatch(0);
+      }
     }
     if (msg.type === 'resetState') {
       isRunning = false;
-      await chrome.storage.local.set({ running: false });
+      chrome.alarms.clear('nextJob');
+      await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
     }
     if (msg.type && msg.type.startsWith('tts-')) {
       const ok = await ensureTTSOffscreen();
@@ -60,53 +88,66 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ── Batch Runner ──────────────────────────────────────────────────────────────
-async function runBatch() {
-  isRunning = true;
-  await chrome.storage.local.set({ running: true });
-  chrome.alarms.create('keepAlive', { periodInMinutes: 1 });
-
-  let processed = 0;
-  try {
-    const { jobs = [], settings = {} } = await chrome.storage.local.get(['jobs', 'settings']);
-    const pending = jobs.filter(j => j.status === 'queued' || j.status === 'error');
-
-    if (settings.combinedPrompt && pending.length > 1) {
-      processed = pending.length;
-      await runBatchCombined(jobs, settings);
-    } else {
-      for (let i = 0; i < jobs.length; i++) {
-        const job = jobs[i];
-        if (job.status === 'done' || job.status === 'error') continue;
-        await processJob(job, settings);
-        processed++;
-        if (i < jobs.length - 1) {
-          const mode = settings.mode || 'web';
-          let ms;
-          if (mode === 'api') {
-            ms = 8000 + Math.random() * 7000;
-          } else if (mode === 'web') {
-            ms = (settings.webDelay ?? 45) * 1000;
-          } else {
-            ms = 3000 + Math.random() * 4000;
-          }
-          await sleep(ms);
-        }
-      }
-    }
-  } finally {
-    isRunning = false;
-    await chrome.storage.local.set({ running: false });
-    chrome.alarms.clear('keepAlive');
-    safePost({ type: 'batchDone' });
+async function runBatch(fromIndex = 0) {
+  if (fromIndex === 0) {
+    await chrome.storage.local.set({ running: true });
+    chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
   }
 
-  if (processed > 0) {
+  const { jobs = [], settings = {} } = await chrome.storage.local.get(['jobs', 'settings']);
+  const mode = settings.mode || 'web';
+
+  if (settings.combinedPrompt && fromIndex === 0) {
+    const pending = jobs.filter(j => j.status === 'queued' || j.status === 'error');
+    if (pending.length > 1) {
+      await runBatchCombined(jobs, settings);
+      await finalizeBatch();
+      return;
+    }
+  }
+
+  for (let i = fromIndex; i < jobs.length; i++) {
+    const job = jobs[i];
+    if (job.status === 'done' || job.status === 'error') continue;
+
+    await processJob(job, settings);
+
+    const hasMore = jobs.slice(i + 1).some(j => j.status !== 'done' && j.status !== 'error');
+    if (!hasMore) break;
+
+    if (mode === 'web') {
+      const ms = (settings.webDelay ?? 45) * 1000;
+      const nextJobAt = Date.now() + ms;
+      await chrome.storage.local.set({ nextJobFromIndex: i + 1, nextJobAt });
+      safePost({ type: 'countdown', nextJobAt });
+      chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
+      isRunning = false;
+      return;
+    } else {
+      const ms = mode === 'api' ? 8000 + Math.random() * 7000 : 3000 + Math.random() * 4000;
+      await sleep(ms);
+    }
+  }
+
+  await finalizeBatch();
+}
+
+async function finalizeBatch() {
+  isRunning = false;
+  const { jobs = [] } = await chrome.storage.local.get('jobs');
+  const doneCount = jobs.filter(j => j.status === 'done').length;
+  await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
+  chrome.alarms.clear('keepAlive');
+  chrome.alarms.clear('nextJob');
+  safePost({ type: 'batchDone' });
+
+  if (doneCount > 0) {
     try {
       chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('logo.png'),
         title: 'YT Summarizer',
-        message: `Processing completed for ${processed} video(s)!`
+        message: `Processing completed for ${doneCount} video(s)!`
       });
     } catch (_) {}
   }
