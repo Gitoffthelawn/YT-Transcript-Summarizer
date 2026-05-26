@@ -36,14 +36,14 @@ async function init() {
     'transcriptLang', 'customPrompt', 'mode',
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile',
     'outputFormat', 'summaryLength', 'jobs', 'running', 'theme',
-    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText'
+    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay'
   ]);
 
   const {
     transcriptLang, customPrompt, mode,
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile,
     outputFormat, summaryLength, jobs: savedJobs, running: savedRunning, theme,
-    ttsState, ttsRate, ttsVoice, ttsText
+    ttsState, ttsRate, ttsVoice, ttsText, webDelay
   } = stored;
 
   // Migrate legacy apiKey → apiKeys.anthropic
@@ -74,6 +74,7 @@ async function init() {
   speechSynthesis.onvoiceschanged = () => populateTTSVoices(ttsVoice);
   if (ttsText) document.getElementById('tts-text').value = ttsText;
   if (ttsState) updateTTSStatus(ttsState);
+  document.getElementById('web-delay').value = webDelay ?? 45;
 
   if (transcriptLang) {
     document.getElementById('transcript-lang-select').value = transcriptLang;
@@ -424,10 +425,10 @@ async function startBatch() {
   await persistSettings();
   const {
     models = {}, customEndpointUrl, transcriptLang, customPrompt, mode,
-    useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile
+    useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, webDelay: storedDelay
   } = await chrome.storage.local.get([
     'models', 'customEndpointUrl', 'transcriptLang', 'customPrompt', 'mode',
-    'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile'
+    'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile', 'webDelay'
   ]);
 
   const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
@@ -482,7 +483,8 @@ async function startBatch() {
       autoPaste: !!autoPaste,
       autoSubmit: !!autoSubmit,
       combinedPrompt: !!combinedPrompt,
-      saveTranscriptFile: saveTranscriptFile !== false
+      saveTranscriptFile: saveTranscriptFile !== false,
+      webDelay: storedDelay ?? 45
     }
   });
 }

@@ -81,9 +81,14 @@ async function runBatch() {
         processed++;
         if (i < jobs.length - 1) {
           const mode = settings.mode || 'web';
-          const ms = mode === 'api'
-            ? 8000 + Math.random() * 7000
-            : 3000 + Math.random() * 4000;
+          let ms;
+          if (mode === 'api') {
+            ms = 8000 + Math.random() * 7000;
+          } else if (mode === 'web') {
+            ms = (settings.webDelay ?? 45) * 1000;
+          } else {
+            ms = 3000 + Math.random() * 4000;
+          }
           await sleep(ms);
         }
       }

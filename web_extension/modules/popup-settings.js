@@ -70,6 +70,7 @@ export async function persistSettings() {
   const combinedPrompt    = document.getElementById('combined-prompt-cb').checked;
   const saveTranscriptFile = document.getElementById('save-file-cb').checked;
   const summaryLength     = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
+  const webDelay          = Math.max(10, parseInt(document.getElementById('web-delay').value, 10) || 45);
 
   const { apiKeys: storedKeys = {}, models: storedModels = {} } =
     await chrome.storage.local.get(['apiKeys', 'models']);
@@ -81,7 +82,7 @@ export async function persistSettings() {
     provider, apiKeys: newApiKeys, models: newModels, customEndpointUrl,
     apiKey: provider === 'anthropic' ? apiKey : (storedKeys.anthropic || ''),
     model:  provider === 'anthropic' ? model  : (storedModels.anthropic || 'claude-sonnet-4-6'),
-    transcriptLang, customPrompt, mode, useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, summaryLength
+    transcriptLang, customPrompt, mode, useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, summaryLength, webDelay
   });
 }
 
