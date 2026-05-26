@@ -12,33 +12,34 @@ function extractVideoId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-function readCache(videoId: string): { transcript: string; title: string; strategy: string } | null {
+function readCache(videoId: string): { transcript: string; title: string; strategy: string; lang?: string; length?: string } | null {
   try {
     const raw = localStorage.getItem(`yt_cache_${videoId}`);
     if (!raw) return null;
-    const { transcript, title, strategy, timestamp } = JSON.parse(raw);
+    const { transcript, title, strategy, lang, length, timestamp } = JSON.parse(raw);
     if (Date.now() - timestamp > CACHE_TTL_MS) {
       localStorage.removeItem(`yt_cache_${videoId}`);
       return null;
     }
-    return { transcript, title, strategy };
+    return { transcript, title, strategy, lang, length };
   } catch {
     return null;
   }
 }
 
-function writeCache(videoId: string, transcript: string, title: string, strategy: string) {
+function writeCache(videoId: string, transcript: string, title: string, strategy: string, lang: string, length: string) {
   try {
-    localStorage.setItem(`yt_cache_${videoId}`, JSON.stringify({ transcript, title, strategy, timestamp: Date.now() }));
+    localStorage.setItem(`yt_cache_${videoId}`, JSON.stringify({ transcript, title, strategy, lang, length, timestamp: Date.now() }));
   } catch {}
 }
+
 
 type CacheChoice = {
   url: string;
   provider: string;
   length: string;
   lang: string;
-  cached: { transcript: string; title: string; strategy: string };
+  cached: { transcript: string; title: string; strategy: string; lang?: string; length?: string };
 };
 
 export default function Home() {
@@ -102,9 +103,8 @@ export default function Home() {
         throw new Error(data.error || "Failed to extract transcript.");
       }
 
-      // Save to cache
       if (videoId) {
-        writeCache(videoId, data.transcript, data.title || url, data.strategy || '');
+        writeCache(videoId, data.transcript, data.title || url, data.strategy || '', lang, length);
       }
 
       // Update history
@@ -156,6 +156,17 @@ export default function Home() {
     setPendingCacheChoice(null);
     handleExtract(url, provider, length, lang, true);
   };
+
+  const LANG_LABELS: Record<string, string> = { it: 'Italiano', en: 'English', es: 'Español' };
+  const LENGTH_LABELS: Record<string, string> = { short: 'Short', normal: 'Normal', long: 'Long' };
+  const cacheDiffLabel = (() => {
+    if (!pendingCacheChoice) return '';
+    const { cached, lang, length } = pendingCacheChoice;
+    const parts: string[] = [];
+    if (cached.lang && cached.lang !== lang) parts.push(LANG_LABELS[cached.lang] ?? cached.lang);
+    if (cached.length && cached.length !== length) parts.push(LENGTH_LABELS[cached.length] ?? cached.length);
+    return parts.join(', ');
+  })();
 
   return (
     <main className="flex-1 flex flex-col items-center justify-center p-6 w-full max-w-lg mx-auto relative z-10">
@@ -219,6 +230,9 @@ export default function Home() {
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-[var(--foreground)]">Cached transcript found</p>
                 <p className="text-xs text-[var(--foreground)] opacity-50 truncate">{pendingCacheChoice.cached.title}</p>
+                {cacheDiffLabel && (
+                  <p className="text-xs text-amber-500 dark:text-amber-400 mt-0.5">Cached with: {cacheDiffLabel}</p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
