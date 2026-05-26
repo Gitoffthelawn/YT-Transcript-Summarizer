@@ -96,7 +96,7 @@ async function init() {
   setChip('chip-autosubmit', !!autoSubmit);
   setChip('chip-combine', !!combinedPrompt);
   setChip('chip-thinking', !!useThinking);
-  setChip('chip-save-file', saveTranscriptFile !== false);
+  setChip('chip-save-file', !!saveTranscriptFile);
   setOutputFormat(currentFmt);
   setSummaryLength(currentLen);
   if (autoSubmit) document.getElementById('chip-autopaste').classList.add('locked');
@@ -483,7 +483,7 @@ async function startBatch() {
       autoPaste: !!autoPaste,
       autoSubmit: !!autoSubmit,
       combinedPrompt: !!combinedPrompt,
-      saveTranscriptFile: saveTranscriptFile !== false,
+      saveTranscriptFile: !!saveTranscriptFile,
       webDelay: storedDelay ?? 45
     }
   });

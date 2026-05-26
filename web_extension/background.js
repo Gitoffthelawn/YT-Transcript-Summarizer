@@ -122,7 +122,7 @@ async function processJob(job, settings) {
     let result = null;
     let debugLog = `=== DEBUG LOG v2.0 per ${videoId} ===\nURL: ${job.url}\n\n`;
 
-    const transcriptLang = job.lang || settings.transcriptLang || 'it';
+    const transcriptLang = job.lang || settings.transcriptLang || 'en';
     debugLog += `Preferred transcript language: "${transcriptLang}"\n\n`;
     const effectivePrompt = job.prompt || settings.prompt;
 
@@ -212,7 +212,7 @@ async function processJob(job, settings) {
                           : provider;
       await updateJobStatus(job.id, 'active', `🌐 Opening ${providerLabel}...`);
       const webContent = `${effectivePrompt}\n\n---\n\n${transcript}`;
-      if (settings.saveTranscriptFile !== false) {
+      if (!!settings.saveTranscriptFile) {
         await chrome.downloads.download({
           url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(webContent),
           filename: `${safeTitle}_transcript.txt`,
