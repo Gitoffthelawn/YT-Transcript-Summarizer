@@ -37,67 +37,78 @@ export async function POST(request: Request) {
     const logs: string[] = [];
     const log = (msg: string) => logs.push(msg);
 
-    let result = null;
+    let result: { title: string; transcript: string } | null = null;
     let strategy = '';
+
+    // A transcript that is long but doesn't end with sentence-ending punctuation
+    // was likely cut off by the provider's free-tier character cap.
+    const looksTruncated = (r: typeof result): boolean => {
+      if (!r) return false;
+      const t = r.transcript.trimEnd();
+      return t.length >= 15000 && !/[.!?»]$/.test(t);
+    };
+
+    const better = (candidate: typeof result): boolean =>
+      !!candidate && candidate.transcript.length > (result?.transcript.length ?? 0);
 
     // Strategy 0: Supadata (bypasses YouTube datacenter IP blocks)
     try {
-      result = await fetchViaSupadata(videoId, log, lang);
-      if (result) strategy = 'Supadata';
+      const r = await fetchViaSupadata(videoId, log, lang);
+      if (r) { result = r; strategy = 'Supadata'; }
     } catch (e: any) {
       log(`Supadata Error: ${e.message}`);
     }
 
     // Strategy 1: Piped / Invidious instance rotator (proxies YouTube through open instances)
-    if (!result) {
+    if (!result || looksTruncated(result)) {
       log('Trying Piped/Invidious instance rotator...');
       try {
-        result = await fetchViaOpenInstances(videoId, log, lang);
-        if (result) strategy = 'Piped/Invidious';
+        const r = await fetchViaOpenInstances(videoId, log, lang);
+        if (better(r)) { result = r; strategy = 'Piped/Invidious'; }
       } catch (e: any) {
         log(`Open instances Error: ${e.message}`);
       }
     }
 
     // Strategy 2: Android Player
-    if (!result) {
+    if (!result || looksTruncated(result)) {
       log('Trying Android Player API...');
       try {
-        result = await fetchViaAndroidPlayer(videoId, log, lang);
-        if (result) strategy = 'Android Player';
+        const r = await fetchViaAndroidPlayer(videoId, log, lang);
+        if (better(r)) { result = r; strategy = 'Android Player'; }
       } catch (e: any) {
         log(`Android Player Error: ${e.message}`);
       }
     }
 
     // Strategy 3: Watch page + caption CDN URLs (bypasses InnerTube API blocking)
-    if (!result) {
+    if (!result || looksTruncated(result)) {
       log('Trying Watch Page extraction...');
       try {
-        result = await fetchViaGetTranscript(videoId, log, lang);
-        if (result) strategy = 'Watch Page';
+        const r = await fetchViaGetTranscript(videoId, log, lang);
+        if (better(r)) { result = r; strategy = 'Watch Page'; }
       } catch (e: any) {
         log(`Watch Page Error: ${e.message}`);
       }
     }
 
     // Strategy 4: Legacy timedtext API
-    if (!result) {
+    if (!result || looksTruncated(result)) {
       log('Trying Timedtext API...');
       try {
-        result = await fetchViaTimedText(videoId, log, lang);
-        if (result) strategy = 'Timedtext API';
+        const r = await fetchViaTimedText(videoId, log, lang);
+        if (better(r)) { result = r; strategy = 'Timedtext API'; }
       } catch (e: any) {
         log(`Timedtext Error: ${e.message}`);
       }
     }
 
     // Strategy 5: youtube-transcript npm package
-    if (!result) {
+    if (!result || looksTruncated(result)) {
       log('Trying youtube-transcript package...');
       try {
-        result = await fetchViaYoutubeTranscriptPackage(videoId, log, lang);
-        if (result) strategy = 'youtube-transcript';
+        const r = await fetchViaYoutubeTranscriptPackage(videoId, log, lang);
+        if (better(r)) { result = r; strategy = 'youtube-transcript'; }
       } catch (e: any) {
         log(`youtube-transcript package Error: ${e.message}`);
       }
