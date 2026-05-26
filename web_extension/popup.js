@@ -102,7 +102,7 @@ async function init() {
   speechSynthesis.onvoiceschanged = () => populateTTSVoices(ttsVoice);
   if (ttsText) document.getElementById('tts-text').value = ttsText;
   if (ttsState) updateTTSStatus(ttsState);
-  document.getElementById('web-delay').value = webDelay ?? 45;
+  document.getElementById('web-delay').value = webDelay ?? 30;
 
   if (transcriptLang) {
     document.getElementById('transcript-lang-select').value = transcriptLang;
@@ -515,7 +515,7 @@ async function startBatch() {
       autoSubmit: !!autoSubmit,
       combinedPrompt: !!combinedPrompt,
       saveTranscriptFile: !!saveTranscriptFile,
-      webDelay: storedDelay ?? 45
+      webDelay: storedDelay ?? 30
     }
   });
 }

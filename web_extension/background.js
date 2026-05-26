@@ -116,7 +116,7 @@ async function runBatch(fromIndex = 0) {
     if (!hasMore) break;
 
     if (mode === 'web') {
-      const ms = (settings.webDelay ?? 45) * 1000;
+      const ms = (settings.webDelay ?? 30) * 1000;
       const nextJobAt = Date.now() + ms;
       await chrome.storage.local.set({ nextJobFromIndex: i + 1, nextJobAt });
       safePost({ type: 'countdown', nextJobAt });
