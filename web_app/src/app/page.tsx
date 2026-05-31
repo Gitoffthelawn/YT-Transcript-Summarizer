@@ -303,10 +303,11 @@ export default function Home() {
       setHistory((prev) => {
         const title = resultData!.title || url;
         const newEntry = { url, title, date: new Date().toISOString() };
-        const updated = [...prev];
+        let updated = [...prev];
         const idx = updated.findIndex((h) => h.url === url);
-        if (idx >= 0) updated[idx] = newEntry;
-        else updated.unshift(newEntry);
+        if (idx >= 0) updated.splice(idx, 1);
+        updated.unshift(newEntry);
+        if (updated.length > 50) updated = updated.slice(0, 50);
         try {
           localStorage.setItem("videoHistory", JSON.stringify(updated));
         } catch {}
@@ -357,10 +358,11 @@ export default function Home() {
           title: cached.title,
           date: new Date().toISOString(),
         };
-        const updated = [...prev];
+        let updated = [...prev];
         const idx = updated.findIndex((h) => h.url === url);
-        if (idx >= 0) updated[idx] = newEntry;
-        else updated.unshift(newEntry);
+        if (idx >= 0) updated.splice(idx, 1);
+        updated.unshift(newEntry);
+        if (updated.length > 50) updated = updated.slice(0, 50);
         try {
           localStorage.setItem("videoHistory", JSON.stringify(updated));
         } catch {}

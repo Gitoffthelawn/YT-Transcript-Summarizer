@@ -99,16 +99,17 @@ export async function POST(request: Request) {
 
       const better = (candidate: TranscriptResult | null): boolean => {
         if (!candidate) return false;
+        if (!result) return true;
         // Prefer a non-truncated candidate over a truncated result
         if (looksTruncated(result) && !looksTruncated(candidate)) return true;
         // Never replace a good result with a truncated but longer candidate
         if (!looksTruncated(result) && looksTruncated(candidate)) return false;
-        return candidate.transcript.length > (result?.transcript.length ?? 0);
+        return candidate.transcript.length > result.transcript.length;
       };
 
       /** Returns true if we should try the next strategy. */
       const shouldContinue = (): boolean =>
-        !timedOut && (!result || looksTruncated(result));
+        !timedOut && !request.signal.aborted && (!result || looksTruncated(result));
 
       // ── Global timeout ─────────────────────────────────────────────────
       // Prevents the entire strategy chain from running forever.
