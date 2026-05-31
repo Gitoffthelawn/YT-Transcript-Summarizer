@@ -6,7 +6,7 @@ import ActionButtons from "@/components/ActionButtons";
 import { getPreset, APP_VERSION } from "@/lib/config";
 
 // ── Cache constants ──────────────────────────────────────────────────────────
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CACHE_PREFIX = "yt_cache_";
 const MAX_CACHE_ENTRIES = 20;
 
