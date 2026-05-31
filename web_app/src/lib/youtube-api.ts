@@ -441,8 +441,11 @@ function parseTranscriptText(text: string): string | null {
     if (lines.length > 0) return lines.join('\n');
   } catch (_) {}
 
-  const xmlLines = [...text.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
+  // Use [\s\S]*? instead of [^<]* so that inline tags (e.g. <font>) inside
+  // <text> elements are captured and then stripped.
+  const xmlLines = [...text.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)]
     .map(m => m[1]
+      .replace(/<[^>]+>/g, '')
       .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim())
     .filter(Boolean);

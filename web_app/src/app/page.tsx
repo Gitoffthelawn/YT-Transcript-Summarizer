@@ -46,7 +46,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [promptReady, setPromptReady] = useState<{ text: string; provider: string; strategy: string } | null>(null);
+  const [promptReady, setPromptReady] = useState<{ text: string; provider: string; strategy: string; truncated?: boolean } | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("light");
   const [history, setHistory] = useState<{ url: string; title: string; date: string }[]>([]);
   const [selectedUrl, setSelectedUrl] = useState<string | undefined>(undefined);
@@ -121,7 +121,7 @@ export default function Home() {
 
       const promptInstruction = getPreset(lang, length);
       const fullPrompt = `${promptInstruction}\n\n---\n\n${data.transcript}`;
-      setPromptReady({ text: fullPrompt, provider, strategy: data.strategy || '' });
+      setPromptReady({ text: fullPrompt, provider, strategy: data.strategy || '', truncated: !!data.truncated });
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");
     } finally {
@@ -288,6 +288,17 @@ export default function Home() {
 
         {promptReady && (
           <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-4 duration-500 w-full mt-2">
+            {promptReady.truncated && (
+              <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 p-4 rounded-2xl text-sm border border-amber-200 dark:border-amber-900/50 animate-in fade-in">
+                <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <div>
+                  <p className="font-semibold">Transcript may be truncated</p>
+                  <p className="text-xs opacity-80 mt-0.5">The transcript appears to be cut off. The summary may be incomplete. Try a different video source or re-fetch.</p>
+                </div>
+              </div>
+            )}
             {promptReady.strategy && (
               <div className="flex items-center gap-2 px-1">
                 <span className="text-xs text-[var(--foreground)] opacity-50">via</span>

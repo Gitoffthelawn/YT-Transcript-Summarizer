@@ -42,15 +42,25 @@ export async function POST(request: Request) {
 
     // A transcript that is long but doesn't end with sentence-ending punctuation
     // was likely cut off by the provider's free-tier character cap.
+    // Threshold lowered from 15 000 to 5 000: some providers truncate well
+    // below the old limit, so the fallback chain was not triggered.
+    // Punctuation set expanded for international transcripts (CJK, ellipsis,
+    // closing quotes/brackets).
+    const TRUNCATION_MIN_LENGTH = 5000;
+    const SENTENCE_END_RE = /[.!?\u2026\u00BB\u3002\uFF01\uFF1F)\]"'\u201D\u2019\u00AB]$/;
+
     const looksTruncated = (r: typeof result): boolean => {
       if (!r) return false;
       const t = r.transcript.trimEnd();
-      return t.length >= 15000 && !/[.!?»]$/.test(t);
+      return t.length >= TRUNCATION_MIN_LENGTH && !SENTENCE_END_RE.test(t);
     };
 
     const better = (candidate: typeof result): boolean => {
       if (!candidate) return false;
+      // Prefer a non-truncated candidate over a truncated result
       if (looksTruncated(result) && !looksTruncated(candidate)) return true;
+      // Never replace a good result with a truncated but longer candidate
+      if (!looksTruncated(result) && looksTruncated(candidate)) return false;
       return candidate.transcript.length > (result?.transcript.length ?? 0);
     };
 
@@ -124,6 +134,8 @@ export async function POST(request: Request) {
       }, { status: 404 });
     }
 
+    const truncated = looksTruncated(result);
+
     const title = (result.title && result.title !== videoId)
       ? result.title
       : (await fetchVideoTitle(videoId)) ?? videoId;
@@ -132,6 +144,7 @@ export async function POST(request: Request) {
       title,
       transcript: result.transcript,
       strategy,
+      truncated,
       logs
     });
   } catch (error: any) {
