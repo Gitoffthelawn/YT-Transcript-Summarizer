@@ -15,8 +15,9 @@ The project ships as two complementary clients that share the same transcript-ex
 
 1. A YouTube URL is submitted.
 2. The transcript is extracted using multiple strategies with automatic fallback (6 server-side strategies in the web app, 4 in the extension).
-3. A prompt is assembled (provider, language, length, and format are all configurable).
-4. The result is either sent directly to an AI API, or copied so you can paste it into any chat UI.
+3. If the video has no captions in the requested language, YouTube's auto-translate (`tlang`) is used automatically.
+4. A prompt is assembled (provider, language, length, and format are all configurable).
+5. The result is either sent directly to an AI API, or copied so you can paste it into any chat UI.
 
 ---
 
@@ -34,11 +35,29 @@ The project ships as two complementary clients that share the same transcript-ex
 | Thinking mode (Claude) | ✅ | — |
 | Auto-paste / auto-submit | ✅ | — |
 | Text-to-Speech | ✅ | — |
-| 5-minute transcript cache | — | ✅ |
+| 7-day transcript cache (localStorage) | — | ✅ |
+| Clear cache button | — | ✅ |
 | Strategy badge (shows which method succeeded) | — | ✅ |
+| Share to app (Web Share API, bypasses Android clipboard limit) | — | ✅ |
 | Video history | ✅ (No limit) | ✅ (No limit) |
 | Dark / light theme | ✅ | ✅ |
-| Languages | English, Italian, Spanish | English, Italian, Spanish |
+| Languages | English, Italian, Spanish | 15 languages + YouTube auto-translate |
+
+---
+
+## Language support
+
+### Web app
+
+The Language selector includes 15 languages: Italian, English, Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Arabic, Russian, Dutch, Polish, Turkish, and Hindi.
+
+Full native prompts are provided for Italian, English, Spanish, French, German, and Portuguese. Other languages fall back to the English prompt — the AI infers the correct output language from the transcript.
+
+When a video has no captions in the requested language the app automatically uses YouTube's `tlang` auto-translate parameter, so you can always get a transcript in your chosen language as long as the video has any captions at all.
+
+### Extension
+
+English, Italian, Spanish.
 
 ---
 
@@ -47,7 +66,7 @@ The project ships as two complementary clients that share the same transcript-ex
 Both clients use the same:
 - **Transcript extraction strategies** (Android Player API, `get_transcript` endpoint, Timedtext API)
 - **Provider configuration** (names, models, default models, API endpoints)
-- **Prompt presets** (English, Italian, and Spanish; three lengths; two formats)
+- **Prompt presets** (Italian, English, Spanish, French, German, Portuguese; three lengths; two formats)
 
 The extension is plain JavaScript (ES modules, Manifest V3); the web app is TypeScript (Next.js, React, Tailwind CSS 4). The shared configuration is kept in sync between `web_extension/modules/config.js` and `web_app/src/lib/config.ts`.
 
@@ -84,13 +103,13 @@ YT-Transcript-Summarizer/
     │   │   ├── page.tsx        Main UI (form, prompt editor, cache, history)
     │   │   ├── layout.tsx
     │   │   ├── globals.css
-    │   │   └── api/transcript/ Server-side extraction endpoint
+    │   │   └── api/transcript/ Server-side extraction endpoint (6 strategies)
     │   ├── components/
     │   │   ├── TranscriptForm.tsx
     │   │   └── ActionButtons.tsx
     │   └── lib/
-    │       ├── config.ts       Providers, prompts, YouTube API config
-    │       ├── youtube-api.ts  Transcript extraction strategies
+    │       ├── config.ts       Providers, prompts, language list, YouTube API config
+    │       ├── youtube-api.ts  Transcript extraction strategies + auto-translate
     │       └── utils.ts
     └── public/manifest.json    PWA manifest
 ```

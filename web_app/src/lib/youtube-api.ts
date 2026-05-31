@@ -382,32 +382,33 @@ export async function fetchViaTimedText(
 ): Promise<{ title: string; transcript: string } | null> {
   log('Trying timedtext API...');
   const primary = lang === 'auto' ? 'en' : lang;
-  const candidates = [...new Set([primary, 'en'])];
 
-  for (const l of candidates) {
-    for (const extra of ['', '&kind=asr']) {
-      const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${l}${extra}&fmt=json3`;
-      try {
-        const resp = await fetchWithTimeout(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Cookie': 'SOCS=CAI; CONSENT=YES+cb',
-          }
-        }, 12000);
-        if (!resp.ok) { log(`timedtext ${l}${extra}: HTTP ${resp.status}`); continue; }
-        const text = await resp.text();
-        if (text.length < 10) { log(`timedtext ${l}${extra}: empty`); continue; }
-        const parsed = parseTranscriptText(text);
-        if (parsed) {
-          log(`timedtext ${l}${extra}: ✅ ${parsed.length} chars`);
-          return { title: videoId, transcript: parsed };
+  const tryTimedText = async (urlLang: string, extra: string, label: string) => {
+    const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${urlLang}${extra}&fmt=json3`;
+    try {
+      const resp = await fetchWithTimeout(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Cookie': 'SOCS=CAI; CONSENT=YES+cb',
         }
-      } catch (e: any) { log(`timedtext ${l}${extra}: ${e.message}`); }
-    }
+      }, 12000);
+      if (!resp.ok) { log(`timedtext ${label}: HTTP ${resp.status}`); return null; }
+      const text = await resp.text();
+      if (text.length < 10) { log(`timedtext ${label}: empty`); return null; }
+      const parsed = parseTranscriptText(text);
+      if (parsed) { log(`timedtext ${label}: ✅ ${parsed.length} chars`); return parsed; }
+    } catch (e: any) { log(`timedtext ${label}: ${e.message}`); }
+    return null;
+  };
+
+  // Phase 1: direct captions in the requested language
+  for (const extra of ['', '&kind=asr']) {
+    const parsed = await tryTimedText(primary, extra, `${primary}${extra}`);
+    if (parsed) return { title: videoId, transcript: parsed };
   }
 
-  // Auto-translate fallback: fetch English captions and request YouTube to translate
   if (primary !== 'en') {
+    // Phase 2: auto-translate English captions → requested language (better than raw English)
     for (const extra of ['', '&kind=asr']) {
       const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en${extra}&tlang=${primary}&fmt=json3`;
       try {
@@ -426,6 +427,12 @@ export async function fetchViaTimedText(
           return { title: videoId, transcript: parsed };
         }
       } catch (e: any) { log(`timedtext tlang=${primary}${extra}: ${e.message}`); }
+    }
+
+    // Phase 3: raw English as last resort
+    for (const extra of ['', '&kind=asr']) {
+      const parsed = await tryTimedText('en', extra, `en${extra} (fallback)`);
+      if (parsed) return { title: videoId, transcript: parsed };
     }
   }
 
