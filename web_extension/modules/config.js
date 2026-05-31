@@ -157,7 +157,7 @@ export const PROMPTS = {
       normal: "Genera un resumen completo y detallado del siguiente video. Debes considerar el video completo. Asegúrate de no omitir ningún punto, explicación o detalle importante.",
       long:   "Genera un resumen detallado y estructurado del siguiente video. Cubre cada sección, argumento, ejemplo y detalle mencionado. Organiza el resultado con secciones claras. Incluye transiciones entre temas donde sea relevante. No omitas nada."
     }
-  }
+  },
   // ── French ───────────────────────────────────────────────────────────────
   fr: {
     md: {
