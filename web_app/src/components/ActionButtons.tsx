@@ -80,8 +80,16 @@ export default function ActionButtons({ promptText, provider, transcriptText, tr
     URL.revokeObjectURL(blobUrl);
   };
 
+  const isLarge = promptText.length > 50_000;
+
   return (
     <div className="flex flex-col gap-3 mt-4 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {isLarge && (
+        <p className="text-xs text-center text-[var(--foreground)] opacity-50">
+          Transcript is large — if Copy is truncated on mobile, use{" "}
+          <span className="font-semibold">Download</span> ↓
+        </p>
+      )}
       <div className="flex gap-3">
         <button
           onClick={handleCopy}
