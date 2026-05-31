@@ -8,7 +8,7 @@ import { getPreset, APP_VERSION } from "@/lib/config";
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function extractVideoId(url: string): string | null {
-  const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|\/v\/)([0-9A-Za-z_-]{11})/);
+  const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|\/v\/|\/live\/)([0-9A-Za-z_-]{11})/);
   return match ? match[1] : null;
 }
 
