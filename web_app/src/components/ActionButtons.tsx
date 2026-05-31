@@ -66,8 +66,8 @@ export default function ActionButtons({ promptText, provider, transcriptText, tr
       try {
         await navigator.share({ title: transcriptTitle || 'YouTube Summary', files: [file] });
         return;
-      } catch (err: any) {
-        if (err.name === 'AbortError') return; // user cancelled — don't fall through
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') return; // user cancelled — don't fall through
         // Other error: fall through to text share
       }
     }

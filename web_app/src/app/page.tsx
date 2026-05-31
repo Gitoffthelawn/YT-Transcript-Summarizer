@@ -171,6 +171,7 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem("videoHistory");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (saved) setHistory(JSON.parse(saved));
     } catch {}
     const params = new URLSearchParams(window.location.search);
@@ -190,6 +191,7 @@ export default function Home() {
   // Elapsed time counter (ticks every second while loading)
   useEffect(() => {
     if (!isLoading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setElapsedTime(0);
       return;
     }
@@ -346,12 +348,12 @@ export default function Home() {
       });
       setResultLogs([...logs]);
       setStreamLogs([]);
-    } catch (err: any) {
-      if (err.name === "AbortError") {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
         // User cancelled — just reset, no error
         setStreamLogs([]);
       } else {
-        setError(err.message || "An unexpected error occurred.");
+        setError(err instanceof Error ? err.message : "An unexpected error occurred.");
       }
     } finally {
       setIsLoading(false);

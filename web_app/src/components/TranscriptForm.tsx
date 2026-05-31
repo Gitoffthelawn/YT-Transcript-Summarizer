@@ -17,6 +17,7 @@ export default function TranscriptForm({ onSubmit, isLoading, selectedUrl }: Tra
 
   useEffect(() => {
     if (selectedUrl) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUrl(selectedUrl);
     }
   }, [selectedUrl]);
@@ -65,7 +66,7 @@ export default function TranscriptForm({ onSubmit, isLoading, selectedUrl }: Tra
                 onChange={handleProviderChange}
                 className="w-full bg-[var(--background)] border border-[var(--card-border)] rounded-xl px-3 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-brand-500/50 appearance-none"
               >
-                {Object.entries(PROVIDERS).filter(([k, v]) => v.hasWebUI).map(([key, p]) => (
+                {Object.entries(PROVIDERS).filter(([, v]) => v.hasWebUI).map(([key, p]) => (
                   <option key={key} value={key}>{p.name}</option>
                 ))}
               </select>

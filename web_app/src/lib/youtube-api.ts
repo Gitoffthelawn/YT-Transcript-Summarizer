@@ -462,7 +462,9 @@ export async function fetchViaYoutubeTranscriptPackage(
           log(`youtube-transcript (en fallback): ✅ ${transcript.length} chars`);
           return { title: videoId, transcript };
         }
-      } catch (_) {}
+      } catch {
+        // Ignored
+      }
     }
     log(`youtube-transcript: ${e.message}`);
     return null;
@@ -477,7 +479,9 @@ function parseTranscriptText(text: string): string | null {
       .map((e: any) => e.segs.map((s: any) => s.utf8 || '').join('').replace(/\n/g, ' ').trim())
       .filter((t: any) => t && !/^\[.*\]$/.test(t));
     if (lines.length > 0) return lines.join('\n');
-  } catch (_) {}
+  } catch {
+    // Ignored
+  }
 
   // Use [\s\S]*? instead of [^<]* so that inline tags (e.g. <font>) inside
   // <text> elements are captured and then stripped.
@@ -533,7 +537,7 @@ function extractYtInitialPlayerResponse(html: string): any {
     else if (c === '}') {
       depth--;
       if (depth === 0) {
-        try { return JSON.parse(html.slice(jsonStart, i + 1)); } catch (_) { return null; }
+        try { return JSON.parse(html.slice(jsonStart, i + 1)); } catch { return null; }
       }
     }
   }
