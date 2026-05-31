@@ -73,6 +73,15 @@ function evictOldCacheEntries(extraEvictions = 0) {
   }
 }
 
+function clearAllCache() {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(CACHE_PREFIX)) keysToRemove.push(key);
+  }
+  keysToRemove.forEach((k) => localStorage.removeItem(k));
+}
+
 function writeCache(
   videoId: string,
   transcript: string,
@@ -154,6 +163,7 @@ export default function Home() {
   const [resultLogs, setResultLogs] = useState<string[]>([]);
   const [pendingCacheChoice, setPendingCacheChoice] =
     useState<CacheChoice | null>(null);
+  const [cacheCleared, setCacheCleared] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -384,6 +394,14 @@ export default function Home() {
         return updated;
       });
     }
+  };
+
+  // ── Clear all cached transcripts ──────────────────────────────────────
+
+  const handleClearCache = () => {
+    clearAllCache();
+    setCacheCleared(true);
+    setTimeout(() => setCacheCleared(false), 2000);
   };
 
   // ── Re-fetch (bypass cache) ────────────────────────────────────────────
@@ -813,9 +831,17 @@ export default function Home() {
         {/* ── Recent videos ───────────────────────────────────────── */}
         {!promptReady && history.length > 0 && (
           <div className="flex flex-col gap-3 mt-4 animate-in fade-in">
-            <h3 className="text-sm font-semibold text-[var(--foreground)] opacity-80 px-2">
-              Recent Videos
-            </h3>
+            <div className="flex items-center justify-between px-2">
+              <h3 className="text-sm font-semibold text-[var(--foreground)] opacity-80">
+                Recent Videos
+              </h3>
+              <button
+                onClick={handleClearCache}
+                className="text-xs text-[var(--foreground)] opacity-40 hover:opacity-80 transition-opacity px-2 py-0.5 rounded-lg hover:bg-[var(--card-border)]/50"
+              >
+                {cacheCleared ? "✓ Cache cleared" : "Clear cache"}
+              </button>
+            </div>
             <div className="flex flex-col gap-2">
               {history.map((item) => (
                 <button
