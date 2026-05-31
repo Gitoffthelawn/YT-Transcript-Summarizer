@@ -35,7 +35,10 @@ async function fetchVideoTitle(videoId: string): Promise<string | null> {
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const GLOBAL_TIMEOUT_MS = 120_000;
+// 20s buffer: the in-progress strategy's fetch can take up to 15s after the
+// timer fires. We need to finish and flush the SSE response before Vercel's
+// hard maxDuration=120s deadline kills the process.
+const GLOBAL_TIMEOUT_MS = 100_000;
 const TRUNCATION_MIN_LENGTH = 5000;
 const SENTENCE_END_RE =
   /[.!?\u2026\u00BB\u3002\uFF01\uFF1F)\]"'\u201D\u2019\u00AB]$/;

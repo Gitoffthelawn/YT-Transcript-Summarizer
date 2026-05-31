@@ -91,8 +91,12 @@ function writeCache(
     timestamp: Date.now(),
   });
 
+  // If the key already exists we're overwriting it, not adding a new entry,
+  // so eviction is not needed (the total count won't increase).
+  const isUpdate = localStorage.getItem(key) !== null;
+
   try {
-    evictOldCacheEntries();
+    if (!isUpdate) evictOldCacheEntries();
     localStorage.setItem(key, value);
   } catch {
     // QuotaExceeded — evict more aggressively and retry
@@ -784,9 +788,9 @@ export default function Home() {
               Recent Videos
             </h3>
             <div className="flex flex-col gap-2">
-              {history.map((item, i) => (
+              {history.map((item) => (
                 <button
-                  key={i}
+                  key={item.url}
                   onClick={() => setSelectedUrl(item.url)}
                   className="text-left bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl px-4 py-3 text-sm text-[var(--foreground)] hover:bg-[var(--card-border)]/50 transition-colors truncate"
                 >
