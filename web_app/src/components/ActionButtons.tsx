@@ -6,9 +6,11 @@ import { CONFIG } from "@/lib/config";
 interface ActionButtonsProps {
   promptText: string;
   provider: string;
+  transcriptText?: string;
+  transcriptTitle?: string;
 }
 
-export default function ActionButtons({ promptText, provider }: ActionButtonsProps) {
+export default function ActionButtons({ promptText, provider, transcriptText, transcriptTitle }: ActionButtonsProps) {
   const [copied, setCopied] = useState(false);
 
   const getProviderUrl = () => {
@@ -60,6 +62,19 @@ export default function ActionButtons({ promptText, provider }: ActionButtonsPro
 
   const canShare = typeof navigator !== 'undefined' && !!navigator.share;
 
+  const handleDownload = () => {
+    const content = transcriptText || promptText;
+    const safeName = transcriptTitle
+      ? transcriptTitle.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 60)
+      : 'transcript';
+    const blobUrl = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = `${safeName}.txt`;
+    a.click();
+    URL.revokeObjectURL(blobUrl);
+  };
+
   return (
     <div className="flex flex-col gap-3 mt-4 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex gap-3">
@@ -88,6 +103,14 @@ export default function ActionButtons({ promptText, provider }: ActionButtonsPro
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
           Open
+        </button>
+
+        <button
+          onClick={handleDownload}
+          className="rounded-2xl bg-[var(--card-bg)] border border-[var(--card-border)] px-5 py-4 font-semibold text-[var(--foreground)] transition-all active:scale-[0.98] shadow-sm flex items-center justify-center gap-2 hover:bg-[var(--background)]"
+          title="Download transcript as .txt"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
         </button>
       </div>
 

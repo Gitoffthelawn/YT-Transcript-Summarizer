@@ -227,7 +227,9 @@ export async function POST(request: Request) {
         }
 
         // ── Success ──────────────────────────────────────────────────────
-        const truncated = looksTruncated(result);
+        // Only warn about truncation when we also timed out — otherwise we
+        // ran every strategy and the result is as complete as it can be.
+        const truncated = looksTruncated(result) && timedOut;
 
         const title =
           result.title && result.title !== videoId

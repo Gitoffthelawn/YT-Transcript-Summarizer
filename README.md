@@ -27,7 +27,8 @@ The project ships as two complementary clients that share the same transcript-ex
 | AI providers | Claude, OpenAI, Gemini, OpenRouter, Custom | Claude, OpenAI, Gemini |
 | Web mode (open chat UI + copy) | ✅ | ✅ |
 | API mode (call AI directly) | ✅ | — |
-| Transcript-only download | ✅ | — |
+| Transcript download (.txt) | ✅ | ✅ |
+| Extraction log export (copy) | — | ✅ |
 | Batch queue | ✅ | — |
 | Per-video settings | ✅ | — |
 | Thinking mode (Claude) | ✅ | — |
@@ -37,7 +38,7 @@ The project ships as two complementary clients that share the same transcript-ex
 | Strategy badge (shows which method succeeded) | — | ✅ |
 | Video history | ✅ (No limit) | ✅ (No limit) |
 | Dark / light theme | ✅ | ✅ |
-| Languages | English, Italian, Spanish | English, Italian |
+| Languages | English, Italian, Spanish | English, Italian, Spanish |
 
 ---
 

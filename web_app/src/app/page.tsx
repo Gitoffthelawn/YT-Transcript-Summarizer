@@ -131,6 +131,8 @@ type PromptReady = {
   strategy: string;
   truncated?: boolean;
   timedOut?: boolean;
+  transcript?: string;
+  title?: string;
 };
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -148,6 +150,8 @@ export default function Home() {
   >([]);
   const [selectedUrl, setSelectedUrl] = useState<string | undefined>(undefined);
   const [copiedDebug, setCopiedDebug] = useState(false);
+  const [copiedResultLog, setCopiedResultLog] = useState(false);
+  const [resultLogs, setResultLogs] = useState<string[]>([]);
   const [pendingCacheChoice, setPendingCacheChoice] =
     useState<CacheChoice | null>(null);
 
@@ -207,6 +211,7 @@ export default function Home() {
     setError(null);
     setDebugLogs([]);
     setStreamLogs([]);
+    setResultLogs([]);
     setPromptReady(null);
     setPendingCacheChoice(null);
 
@@ -326,7 +331,10 @@ export default function Home() {
         strategy: resultData.strategy || "",
         truncated: !!resultData.truncated,
         timedOut: !!resultData.timedOut,
+        transcript: resultData.transcript,
+        title: resultData.title,
       });
+      setResultLogs([...logs]);
       setStreamLogs([]);
     } catch (err: any) {
       if (err.name === "AbortError") {
@@ -348,10 +356,13 @@ export default function Home() {
     const { url, provider, length, lang, cached } = pendingCacheChoice;
     const promptInstruction = getPreset(lang, length);
     const fullPrompt = `${promptInstruction}\n\n---\n\n${cached.transcript}`;
+    setResultLogs([]);
     setPromptReady({
       text: fullPrompt,
       provider,
       strategy: `${cached.strategy} (cached)`,
+      transcript: cached.transcript,
+      title: cached.title,
     });
     setPendingCacheChoice(null);
     const videoId = extractVideoId(url);
@@ -722,27 +733,43 @@ export default function Home() {
               </div>
             )}
 
-            {/* Strategy badge */}
+            {/* Strategy badge + log export */}
             {promptReady.strategy && (
-              <div className="flex items-center gap-2 px-1">
-                <span className="text-xs text-[var(--foreground)] opacity-50">
-                  via
-                </span>
-                <span
-                  className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
-                    promptReady.strategy.startsWith("Supadata")
-                      ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50"
-                      : "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/50"
-                  }`}
-                >
-                  {promptReady.strategy}
-                </span>
-                {promptReady.strategy.startsWith("Supadata") &&
-                  !promptReady.strategy.includes("cached") && (
-                    <span className="text-xs text-amber-500 dark:text-amber-400 opacity-70">
-                      uses quota (100/mo free)
-                    </span>
-                  )}
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--foreground)] opacity-50">
+                    via
+                  </span>
+                  <span
+                    className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
+                      promptReady.strategy.startsWith("Supadata")
+                        ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50"
+                        : "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/50"
+                    }`}
+                  >
+                    {promptReady.strategy}
+                  </span>
+                  {promptReady.strategy.startsWith("Supadata") &&
+                    !promptReady.strategy.includes("cached") && (
+                      <span className="text-xs text-amber-500 dark:text-amber-400 opacity-70">
+                        uses quota (100/mo free)
+                      </span>
+                    )}
+                </div>
+                {resultLogs.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(resultLogs.join("\n"));
+                        setCopiedResultLog(true);
+                        setTimeout(() => setCopiedResultLog(false), 2000);
+                      } catch {}
+                    }}
+                    className="text-xs text-[var(--foreground)] opacity-40 hover:opacity-80 transition-opacity px-2 py-0.5 rounded-lg hover:bg-[var(--card-border)]/50"
+                  >
+                    {copiedResultLog ? "✓ Log copiato" : "Copia log"}
+                  </button>
+                )}
               </div>
             )}
 
@@ -777,6 +804,8 @@ export default function Home() {
             <ActionButtons
               promptText={promptReady.text}
               provider={promptReady.provider}
+              transcriptText={promptReady.transcript}
+              transcriptTitle={promptReady.title}
             />
           </div>
         )}
