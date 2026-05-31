@@ -95,12 +95,35 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   },
 };
 
+// ── Supported Languages ────────────────────────────────────────────────────────
+// Master list of languages shown in the UI dropdown.
+// Key = ISO 639-1 code, value = display name.
+// Languages without a PROMPTS entry below fall back to the English prompt.
+// ─────────────────────────────────────────────────────────────────────────────
+export const LANGUAGES: Record<string, string> = {
+  it: "Italiano",
+  en: "English",
+  es: "Español",
+  fr: "Français",
+  de: "Deutsch",
+  pt: "Português",
+  zh: "中文",
+  ja: "日本語",
+  ko: "한국어",
+  ar: "العربية",
+  ru: "Русский",
+  nl: "Nederlands",
+  pl: "Polski",
+  tr: "Türkçe",
+  hi: "हिन्दी",
+};
+
 // ── Prompts ────────────────────────────────────────────────────────────────────
 // HOW TO ADD A LANGUAGE:
-//   1. Add a new top-level key using the ISO 639-1 code (e.g. "fr", "de", "pt").
-//   2. Copy the structure from an existing language block (md + chat, each with
-//      short / normal / long variants) and translate the prompt text.
-//   3. The UI will automatically pick up the new language — no other changes needed.
+//   1. Add its ISO 639-1 code + display name to LANGUAGES above.
+//   2. Add a new top-level key here using the same code.
+//   3. Copy the structure from an existing block (md + chat, short/normal/long).
+// Languages not listed here fall back to the English prompt automatically.
 //
 // HOW TO EDIT A PROMPT:
 //   - Find the language key (e.g. "en"), then the format ("md" or "chat"),
@@ -152,6 +175,45 @@ export const PROMPTS: PromptsMap = {
       short:  "Resume el siguiente video. Céntrate solo en los puntos clave.",
       normal: "Genera un resumen completo y detallado del siguiente video. Debes considerar el video completo. Asegúrate de no omitir ningún punto, explicación o detalle importante.",
       long:   "Genera un resumen detallado y estructurado del siguiente video. Cubre cada sección, argumento, ejemplo y detalle mencionado. Organiza el resultado con secciones claras. Incluye transiciones entre temas donde sea relevante. No omitas nada."
+    }
+  },
+  // ── French ───────────────────────────────────────────────────────────────
+  fr: {
+    md: {
+      short:  "Résume la vidéo suivante dans un fichier markdown (.md). Concentre-toi uniquement sur les points clés.",
+      normal: "Génère un résumé complet et détaillé de la vidéo suivante dans un fichier markdown (.md). Considère l'intégralité de la vidéo. Assure-toi de ne manquer aucun point, explication ou détail important.",
+      long:   "Génère un résumé approfondi et structuré de la vidéo suivante dans un fichier markdown (.md). Couvre chaque section, argument, exemple et détail mentionné. Organise le résultat avec des titres et sous-titres clairs. Inclus les transitions entre sujets lorsque c'est pertinent. N'omets rien."
+    },
+    chat: {
+      short:  "Résume la vidéo suivante. Concentre-toi uniquement sur les points clés.",
+      normal: "Génère un résumé complet et détaillé de la vidéo suivante. Considère l'intégralité de la vidéo. Assure-toi de ne manquer aucun point, explication ou détail important.",
+      long:   "Génère un résumé approfondi et structuré de la vidéo suivante. Couvre chaque section, argument, exemple et détail mentionné. Organise le résultat avec des sections claires. Inclus les transitions entre sujets lorsque c'est pertinent. N'omets rien."
+    }
+  },
+  // ── German ────────────────────────────────────────────────────────────────
+  de: {
+    md: {
+      short:  "Fasse das folgende Video als Markdown-Datei (.md) zusammen. Konzentriere dich nur auf die wichtigsten Punkte.",
+      normal: "Erstelle eine vollständige und detaillierte Zusammenfassung des folgenden Videos als Markdown-Datei (.md). Berücksichtige das gesamte Video. Stelle sicher, dass du keine wichtigen Punkte, Erklärungen oder Details auslässt.",
+      long:   "Erstelle eine ausführliche, strukturierte Zusammenfassung des folgenden Videos als Markdown-Datei (.md). Erfasse jeden Abschnitt, jedes Argument, Beispiel und Detail. Organisiere die Ausgabe mit klaren Überschriften und Unterüberschriften. Füge Themenübergänge ein, wo relevant. Lasse nichts aus."
+    },
+    chat: {
+      short:  "Fasse das folgende Video zusammen. Konzentriere dich nur auf die wichtigsten Punkte.",
+      normal: "Erstelle eine vollständige und detaillierte Zusammenfassung des folgenden Videos. Berücksichtige das gesamte Video. Stelle sicher, dass du keine wichtigen Punkte, Erklärungen oder Details auslässt.",
+      long:   "Erstelle eine ausführliche, strukturierte Zusammenfassung des folgenden Videos. Erfasse jeden Abschnitt, jedes Argument, Beispiel und Detail. Organisiere die Ausgabe mit klaren Abschnitten. Füge Themenübergänge ein, wo relevant. Lasse nichts aus."
+    }
+  },
+  // ── Portuguese ────────────────────────────────────────────────────────────
+  pt: {
+    md: {
+      short:  "Resume o seguinte vídeo num ficheiro markdown (.md). Concentra-te apenas nos pontos principais.",
+      normal: "Gera um resumo completo e detalhado do seguinte vídeo num ficheiro markdown (.md). Considera o vídeo na íntegra. Certifica-te de que não omites nenhum ponto, explicação ou detalhe importante.",
+      long:   "Gera um resumo aprofundado e estruturado do seguinte vídeo num ficheiro markdown (.md). Aborda cada secção, argumento, exemplo e detalhe mencionado. Organiza o resultado com títulos e subtítulos claros. Inclui as transições entre temas onde relevante. Não omitas nada."
+    },
+    chat: {
+      short:  "Resume o seguinte vídeo. Concentra-te apenas nos pontos principais.",
+      normal: "Gera um resumo completo e detalhado do seguinte vídeo. Considera o vídeo na íntegra. Certifica-te de que não omites nenhum ponto, explicação ou detalhe importante.",
+      long:   "Gera um resumo aprofundado e estruturado do seguinte vídeo. Aborda cada secção, argumento, exemplo e detalhe mencionado. Organiza o resultado com secções claras. Inclui as transições entre temas onde relevante. Não omitas nada."
     }
   }
   // ── Add new languages below following the same structure ──────────────────

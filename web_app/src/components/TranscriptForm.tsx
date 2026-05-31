@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { PROVIDERS } from "@/lib/config";
+import { PROVIDERS, LANGUAGES } from "@/lib/config";
 
 interface TranscriptFormProps {
   onSubmit: (url: string, provider: string, length: string, lang: string) => void;
@@ -86,9 +86,9 @@ export default function TranscriptForm({ onSubmit, isLoading, selectedUrl }: Tra
                 onChange={(e) => setLang(e.target.value)}
                 className="w-full bg-[var(--background)] border border-[var(--card-border)] rounded-xl px-3 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-brand-500/50 appearance-none"
               >
-                <option value="it">Italiano</option>
-                <option value="en">English</option>
-                <option value="es">Español</option>
+                {Object.entries(LANGUAGES).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
               </select>
               <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none opacity-50">
                 <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -215,9 +215,13 @@ export async function fetchViaAndroidPlayer(
            tracks[0]);
 
       if (!track?.baseUrl) { log(`${clientInfo.clientName}: Track has no baseUrl`); continue; }
-      log(`${clientInfo.clientName}: Track lang="${track.languageCode}", kind="${track.kind || 'standard'}"`);
 
-      const baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
+      const needsTranslation = transcriptLang !== 'auto' &&
+        track.languageCode && !track.languageCode.startsWith(transcriptLang);
+      log(`${clientInfo.clientName}: Track lang="${track.languageCode}", kind="${track.kind || 'standard'}"${needsTranslation ? ` → tlang=${transcriptLang}` : ''}`);
+
+      let baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
+      if (needsTranslation) baseUrl += `&tlang=${transcriptLang}`;
       for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
         try {
           const tResp = await fetchWithTimeout(baseUrl + suffix, {}, 12000);
@@ -294,8 +298,11 @@ export async function fetchViaGetTranscript(
            tracks[0]);
 
       if (track?.baseUrl) {
-        log(`Page extraction: using track lang="${track.languageCode}"`);
-        const baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
+        const needsTranslation = transcriptLang !== 'auto' &&
+          track.languageCode && !track.languageCode.startsWith(transcriptLang);
+        log(`Page extraction: using track lang="${track.languageCode}"${needsTranslation ? ` → tlang=${transcriptLang}` : ''}`);
+        let baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
+        if (needsTranslation) baseUrl += `&tlang=${transcriptLang}`;
         for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
           try {
             const tResp = await fetchWithTimeout(baseUrl + suffix, {
@@ -398,6 +405,30 @@ export async function fetchViaTimedText(
       } catch (e: any) { log(`timedtext ${l}${extra}: ${e.message}`); }
     }
   }
+
+  // Auto-translate fallback: fetch English captions and request YouTube to translate
+  if (primary !== 'en') {
+    for (const extra of ['', '&kind=asr']) {
+      const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en${extra}&tlang=${primary}&fmt=json3`;
+      try {
+        const resp = await fetchWithTimeout(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Cookie': 'SOCS=CAI; CONSENT=YES+cb',
+          }
+        }, 12000);
+        if (!resp.ok) { log(`timedtext tlang=${primary}${extra}: HTTP ${resp.status}`); continue; }
+        const text = await resp.text();
+        if (text.length < 10) { log(`timedtext tlang=${primary}${extra}: empty`); continue; }
+        const parsed = parseTranscriptText(text);
+        if (parsed) {
+          log(`timedtext tlang=${primary}${extra}: ✅ ${parsed.length} chars`);
+          return { title: videoId, transcript: parsed };
+        }
+      } catch (e: any) { log(`timedtext tlang=${primary}${extra}: ${e.message}`); }
+    }
+  }
+
   return null;
 }
 
