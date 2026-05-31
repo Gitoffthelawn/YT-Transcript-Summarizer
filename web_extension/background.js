@@ -14,6 +14,16 @@ chrome.storage.local.get(['running', 'nextJobFromIndex', 'nextJobAt']).then(({ r
     // Still in the delay window — recreate alarm for the remaining time
     const ms = nextJobAt - Date.now();
     chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
+    if (ms < 60000) {
+      setTimeout(() => {
+        chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
+          if (running && !isRunning) {
+            isRunning = true;
+            runBatch(nextJobFromIndex ?? 0);
+          }
+        });
+      }, ms);
+    }
   } else {
     isRunning = true;
     runBatch(nextJobFromIndex ?? 0);
@@ -121,6 +131,16 @@ async function runBatch(fromIndex = 0) {
       await chrome.storage.local.set({ nextJobFromIndex: i + 1, nextJobAt });
       safePost({ type: 'countdown', nextJobAt });
       chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
+      if (ms < 60000) {
+        setTimeout(() => {
+          chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
+            if (running && !isRunning) {
+              isRunning = true;
+              runBatch(nextJobFromIndex ?? 0);
+            }
+          });
+        }, ms);
+      }
       isRunning = false;
       return;
     } else {

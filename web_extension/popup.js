@@ -1,4 +1,4 @@
-import { PROVIDERS, getPreset } from './modules/config.js';
+import { PROVIDERS, getPreset, isPreset } from './modules/config.js';
 import { showMsg } from './modules/ui-utils.js';
 import { state } from './modules/popup-state.js';
 import { renderHistory, clearHistory } from './modules/popup-history.js';
@@ -185,9 +185,11 @@ async function init() {
     const { customPrompt } = await chrome.storage.local.get('customPrompt');
     // Only auto-update if not using a fully custom prompt
     const preset = getPreset(lang, fmt || 'md', len || 'normal');
-    document.getElementById('prompt-input').value = preset;
-    updatePromptPreview(preset);
-    await chrome.storage.local.set({ customPrompt: preset });
+    if (!customPrompt || isPreset(customPrompt)) {
+      document.getElementById('prompt-input').value = preset;
+      updatePromptPreview(preset);
+      await chrome.storage.local.set({ customPrompt: preset });
+    }
   });
 
   // Keep the Advanced Settings lang selector in sync with inline one
@@ -198,9 +200,11 @@ async function init() {
     const { outputFormat: fmt, summaryLength: len } =
       await chrome.storage.local.get(['outputFormat', 'summaryLength']);
     const preset = getPreset(lang, fmt || 'md', len || 'normal');
-    document.getElementById('prompt-input').value = preset;
-    updatePromptPreview(preset);
-    await chrome.storage.local.set({ customPrompt: preset });
+    if (!customPrompt || isPreset(customPrompt)) {
+      document.getElementById('prompt-input').value = preset;
+      updatePromptPreview(preset);
+      await chrome.storage.local.set({ customPrompt: preset });
+    }
   });
 
   document.getElementById('url-input').addEventListener('keydown', e => {
@@ -257,10 +261,15 @@ async function init() {
       const { transcriptLang: lang, summaryLength: len } =
         await chrome.storage.local.get(['transcriptLang', 'summaryLength']);
       const preset = getPreset(lang || 'en', fmt, len || 'normal');
-      document.getElementById('prompt-input').value = preset;
-      updatePromptPreview(preset);
+      const { customPrompt } = await chrome.storage.local.get('customPrompt');
+      if (!customPrompt || isPreset(customPrompt)) {
+        document.getElementById('prompt-input').value = preset;
+        updatePromptPreview(preset);
+        await chrome.storage.local.set({ outputFormat: fmt, customPrompt: preset });
+      } else {
+        await chrome.storage.local.set({ outputFormat: fmt });
+      }
       setOutputFormat(fmt);
-      await chrome.storage.local.set({ outputFormat: fmt, customPrompt: preset });
     });
   });
 
@@ -270,10 +279,15 @@ async function init() {
       const { transcriptLang: lang, outputFormat: fmt } =
         await chrome.storage.local.get(['transcriptLang', 'outputFormat']);
       const preset = getPreset(lang || 'en', fmt || 'md', len);
-      document.getElementById('prompt-input').value = preset;
-      updatePromptPreview(preset);
+      const { customPrompt } = await chrome.storage.local.get('customPrompt');
+      if (!customPrompt || isPreset(customPrompt)) {
+        document.getElementById('prompt-input').value = preset;
+        updatePromptPreview(preset);
+        await chrome.storage.local.set({ summaryLength: len, customPrompt: preset });
+      } else {
+        await chrome.storage.local.set({ summaryLength: len });
+      }
       setSummaryLength(len);
-      await chrome.storage.local.set({ summaryLength: len, customPrompt: preset });
     });
   });
 
@@ -471,7 +485,7 @@ async function startBatch() {
       const len = job.length ?? globalLen;
       return { ...job, prompt: getPreset(transcriptLang || 'en', fmt, len) };
     }
-    return job;
+    return { ...job, prompt: customPrompt || getPreset(transcriptLang || 'en', globalFmt, globalLen) };
   });
 
   const info          = PROVIDERS[provider] || PROVIDERS.anthropic;
@@ -507,7 +521,7 @@ async function startBatch() {
       apiKeys,
       model: currentModel,
       customEndpointUrl: customEndpointUrl || '',
-      prompt: customPrompt || getPreset('en', 'md', 'normal'),
+      prompt: customPrompt || getPreset(transcriptLang || 'en', globalFmt, globalLen),
       mode: currentMode,
       transcriptLang: transcriptLang || 'en',
       useThinking: !!useThinking,

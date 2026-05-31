@@ -167,3 +167,16 @@ export function getPreset(lang, fmt, len = 'normal') {
   const fmtKey = isMD ? 'md' : 'chat';
   return PROMPTS[langKey][fmtKey][len] || PROMPTS[langKey][fmtKey]['normal'];
 }
+
+export function isPreset(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  for (const lang of Object.values(PROMPTS)) {
+    for (const fmt of Object.values(lang)) {
+      for (const preset of Object.values(fmt)) {
+        if (preset.trim() === trimmed) return true;
+      }
+    }
+  }
+  return false;
+}

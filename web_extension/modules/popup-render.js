@@ -1,6 +1,6 @@
 import { state } from './popup-state.js';
 import { escHtml } from './ui-utils.js';
-import { getPreset, PROVIDERS } from './config.js';
+import { getPreset, isPreset, PROVIDERS } from './config.js';
 
 function shortUrl(url) {
   try {
@@ -94,9 +94,11 @@ export async function setJobFormat(id, fmt) {
   const len = job.length ?? ([...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal');
   const { transcriptLang: lang } = await chrome.storage.local.get('transcriptLang');
   const preset = getPreset(lang || 'en', fmt, len);
-  job.prompt = preset;
-  const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
-  if (ta) ta.value = preset;
+  if (!job.prompt || isPreset(job.prompt)) {
+    job.prompt = preset;
+    const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
+    if (ta) ta.value = preset;
+  }
   document.querySelectorAll(`.job-chip-fmt[data-job-id="${id}"]`).forEach(c =>
     c.classList.toggle('on', c.dataset.fmt === fmt)
   );
@@ -112,9 +114,11 @@ export async function setJobLength(id, len) {
   const { transcriptLang: globalLang } = await chrome.storage.local.get('transcriptLang');
   const effectiveLang = job.lang || globalLang || 'en';
   const preset = getPreset(effectiveLang, fmt, len);
-  job.prompt = preset;
-  const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
-  if (ta) ta.value = preset;
+  if (!job.prompt || isPreset(job.prompt)) {
+    job.prompt = preset;
+    const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
+    if (ta) ta.value = preset;
+  }
   document.querySelectorAll(`.job-chip-len[data-job-id="${id}"]`).forEach(c =>
     c.classList.toggle('on', c.dataset.len === len)
   );
@@ -144,9 +148,12 @@ export async function setJobLang(id, lang) {
   const len = job.length ?? ([...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal');
   const { transcriptLang: globalLang } = await chrome.storage.local.get('transcriptLang');
   const effectiveLang = lang || globalLang || 'en';
-  job.prompt = getPreset(effectiveLang, fmt, len);
-  const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
-  if (ta) ta.value = job.prompt;
+  const preset = getPreset(effectiveLang, fmt, len);
+  if (!job.prompt || isPreset(job.prompt)) {
+    job.prompt = preset;
+    const ta = document.querySelector(`.job-prompt-input[data-job-id="${id}"]`);
+    if (ta) ta.value = preset;
+  }
   updateJobEditBtn(id, job);
   await chrome.storage.local.set({ jobs: state.jobs });
 }
