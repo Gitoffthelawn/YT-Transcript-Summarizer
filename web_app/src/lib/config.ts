@@ -157,9 +157,7 @@ export const PROMPTS: PromptsMap = {
   // ── Add new languages below following the same structure ──────────────────
 };
 
-export function getPreset(lang: string, fmt: string, len: string = "normal"): string {
-  const isMD = fmt !== "chat";
+export function getPreset(lang: string, len: string = "normal"): string {
   const langKey = PROMPTS[lang] ? lang : "en";
-  const fmtKey = isMD ? "md" : "chat";
-  return PROMPTS[langKey][fmtKey][len] || PROMPTS[langKey][fmtKey]["normal"];
+  return PROMPTS[langKey]["chat"][len] || PROMPTS[langKey]["chat"]["normal"];
 }

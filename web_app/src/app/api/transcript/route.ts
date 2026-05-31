@@ -48,8 +48,11 @@ export async function POST(request: Request) {
       return t.length >= 15000 && !/[.!?»]$/.test(t);
     };
 
-    const better = (candidate: typeof result): boolean =>
-      !!candidate && candidate.transcript.length > (result?.transcript.length ?? 0);
+    const better = (candidate: typeof result): boolean => {
+      if (!candidate) return false;
+      if (looksTruncated(result) && !looksTruncated(candidate)) return true;
+      return candidate.transcript.length > (result?.transcript.length ?? 0);
+    };
 
     // Strategy 0: Supadata (bypasses YouTube datacenter IP blocks)
     try {

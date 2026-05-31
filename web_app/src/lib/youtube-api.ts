@@ -163,7 +163,7 @@ export async function fetchViaOpenInstances(
 export async function fetchViaAndroidPlayer(
   videoId: string,
   log: (msg: string) => void,
-  transcriptLang = 'it'
+  transcriptLang = 'en'
 ): Promise<{ title: string; transcript: string } | null> {
   const clients = [
     { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 },

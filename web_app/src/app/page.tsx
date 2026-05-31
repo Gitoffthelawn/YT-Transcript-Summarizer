@@ -12,13 +12,13 @@ function extractVideoId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-function readCache(videoId: string): { transcript: string; title: string; strategy: string; lang?: string; length?: string } | null {
+function readCache(videoId: string, lang: string): { transcript: string; title: string; strategy: string; lang?: string; length?: string } | null {
   try {
-    const raw = localStorage.getItem(`yt_cache_${videoId}`);
+    const raw = localStorage.getItem(`yt_cache_${videoId}_${lang}`);
     if (!raw) return null;
-    const { transcript, title, strategy, lang, length, timestamp } = JSON.parse(raw);
+    const { transcript, title, strategy, length, timestamp } = JSON.parse(raw);
     if (Date.now() - timestamp > CACHE_TTL_MS) {
-      localStorage.removeItem(`yt_cache_${videoId}`);
+      localStorage.removeItem(`yt_cache_${videoId}_${lang}`);
       return null;
     }
     return { transcript, title, strategy, lang, length };
@@ -29,7 +29,7 @@ function readCache(videoId: string): { transcript: string; title: string; strate
 
 function writeCache(videoId: string, transcript: string, title: string, strategy: string, lang: string, length: string) {
   try {
-    localStorage.setItem(`yt_cache_${videoId}`, JSON.stringify({ transcript, title, strategy, lang, length, timestamp: Date.now() }));
+    localStorage.setItem(`yt_cache_${videoId}_${lang}`, JSON.stringify({ transcript, title, strategy, lang, length, timestamp: Date.now() }));
   } catch {}
 }
 
@@ -82,7 +82,7 @@ export default function Home() {
       const videoId = extractVideoId(url);
 
       if (videoId && !forceRefresh) {
-        const cached = readCache(videoId);
+        const cached = readCache(videoId, lang);
         if (cached) {
           setIsLoading(false);
           setPendingCacheChoice({ url, provider, length, lang, cached });
@@ -115,11 +115,11 @@ export default function Home() {
         const idx = updated.findIndex(h => h.url === url);
         if (idx >= 0) updated[idx] = newEntry;
         else updated.unshift(newEntry);
-        localStorage.setItem('videoHistory', JSON.stringify(updated));
+        try { localStorage.setItem('videoHistory', JSON.stringify(updated)); } catch {}
         return updated;
       });
 
-      const promptInstruction = getPreset(lang, "chat", length);
+      const promptInstruction = getPreset(lang, length);
       const fullPrompt = `${promptInstruction}\n\n---\n\n${data.transcript}`;
       setPromptReady({ text: fullPrompt, provider, strategy: data.strategy || '' });
     } catch (err: any) {
@@ -132,7 +132,7 @@ export default function Home() {
   const handleUseCached = () => {
     if (!pendingCacheChoice) return;
     const { url, provider, length, lang, cached } = pendingCacheChoice;
-    const promptInstruction = getPreset(lang, "chat", length);
+    const promptInstruction = getPreset(lang, length);
     const fullPrompt = `${promptInstruction}\n\n---\n\n${cached.transcript}`;
     setPromptReady({ text: fullPrompt, provider, strategy: `${cached.strategy} (cached)` });
     setPendingCacheChoice(null);
@@ -144,7 +144,7 @@ export default function Home() {
         const idx = updated.findIndex(h => h.url === url);
         if (idx >= 0) updated[idx] = newEntry;
         else updated.unshift(newEntry);
-        localStorage.setItem('videoHistory', JSON.stringify(updated));
+        try { localStorage.setItem('videoHistory', JSON.stringify(updated)); } catch {}
         return updated;
       });
     }
@@ -266,10 +266,12 @@ export default function Home() {
                 <summary className="cursor-pointer text-xs opacity-70 hover:opacity-100">Debug logs ({debugLogs.length})</summary>
                 <div className="mt-2 flex justify-end">
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(debugLogs.join('\n'));
-                      setCopiedDebug(true);
-                      setTimeout(() => setCopiedDebug(false), 2000);
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(debugLogs.join('\n'));
+                        setCopiedDebug(true);
+                        setTimeout(() => setCopiedDebug(false), 2000);
+                      } catch {}
                     }}
                     className="text-xs px-2 py-1 rounded-lg bg-red-200 dark:bg-red-900/60 hover:bg-red-300 dark:hover:bg-red-800/60 transition-colors"
                   >
