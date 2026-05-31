@@ -51,17 +51,32 @@ export default function ActionButtons({ promptText, provider, transcriptText, tr
   };
 
   const handleShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'YouTube Summary Prompt',
-          text: promptText,
-        });
-      } catch (err) {
-        console.error("Error sharing", err);
-      }
-    } else {
+    if (!navigator.share) {
       alert("Web Share API not supported on this browser.");
+      return;
+    }
+
+    // Web Share Level 2: share as .txt file — bypasses Android clipboard limit entirely
+    const safeName = transcriptTitle
+      ? transcriptTitle.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 60)
+      : 'transcript';
+    const file = new File([promptText], `${safeName}.txt`, { type: 'text/plain' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ title: transcriptTitle || 'YouTube Summary', files: [file] });
+        return;
+      } catch (err: any) {
+        if (err.name === 'AbortError') return; // user cancelled — don't fall through
+        // Other error: fall through to text share
+      }
+    }
+
+    // Level 1 fallback: share as plain text
+    try {
+      await navigator.share({ title: 'YouTube Summary Prompt', text: promptText });
+    } catch (err) {
+      console.error("Error sharing", err);
     }
   };
 
@@ -86,8 +101,12 @@ export default function ActionButtons({ promptText, provider, transcriptText, tr
     <div className="flex flex-col gap-3 mt-4 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       {isLarge && (
         <p className="text-xs text-center text-[var(--foreground)] opacity-50">
-          Transcript is large — if Copy is truncated on mobile, use{" "}
-          <span className="font-semibold">Download</span> ↓
+          Transcript is large — Android clipboard may truncate.{" "}
+          {canShare ? (
+            <>Use <span className="font-semibold">Share</span> or <span className="font-semibold">Download</span> ↓</>
+          ) : (
+            <>Use <span className="font-semibold">Download</span> ↓</>
+          )}
         </p>
       )}
       <div className="flex gap-3">
