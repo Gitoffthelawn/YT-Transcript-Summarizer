@@ -24,12 +24,17 @@ export default function ActionButtons({ promptText, provider, transcriptText, tr
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error("Failed to copy!", err);
-      // Fallback for mobile browsers that might block clipboard API if not directly user initiated
+      // Fallback for browsers that block clipboard API
       const textArea = document.createElement("textarea");
       textArea.value = promptText;
+      // iOS requires the element to be visible and editable to copy correctly
+      textArea.style.cssText =
+        "position:fixed;top:0;left:0;width:2px;height:2px;padding:0;border:none;outline:none;box-shadow:none;background:transparent;opacity:0;";
+      textArea.readOnly = false;
       document.body.appendChild(textArea);
       textArea.focus();
-      textArea.select();
+      // select() truncates on iOS for large content — setSelectionRange does not
+      textArea.setSelectionRange(0, promptText.length);
       try {
         document.execCommand('copy');
         setCopied(true);
