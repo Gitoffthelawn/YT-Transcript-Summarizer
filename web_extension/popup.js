@@ -199,8 +199,9 @@ async function init() {
     await chrome.storage.local.set({ transcriptLang: lang });
     const { outputFormat: fmt, summaryLength: len } =
       await chrome.storage.local.get(['outputFormat', 'summaryLength']);
+    const { customPrompt: currentPrompt } = await chrome.storage.local.get('customPrompt');
     const preset = getPreset(lang, fmt || 'md', len || 'normal');
-    if (!customPrompt || isPreset(customPrompt)) {
+    if (!currentPrompt || isPreset(currentPrompt)) {
       document.getElementById('prompt-input').value = preset;
       updatePromptPreview(preset);
       await chrome.storage.local.set({ customPrompt: preset });
