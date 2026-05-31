@@ -91,7 +91,7 @@ chrome.runtime.onConnect.addListener((port) => {
 async function runBatch(fromIndex = 0) {
   if (fromIndex === 0) {
     await chrome.storage.local.set({ running: true });
-    chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
+    chrome.alarms.create('keepAlive', { periodInMinutes: 1 });
   }
 
   const { jobs = [], settings = {} } = await chrome.storage.local.get(['jobs', 'settings']);
@@ -108,7 +108,7 @@ async function runBatch(fromIndex = 0) {
 
   for (let i = fromIndex; i < jobs.length; i++) {
     const job = jobs[i];
-    if (job.status === 'done' || job.status === 'error') continue;
+    if (job.status === 'done') continue;
 
     await processJob(job, settings);
 
@@ -343,7 +343,7 @@ async function fetchTranscriptForJob(job, settings) {
   const videoId = videoIdMatch ? videoIdMatch[1] : null;
   if (!videoId) throw new Error('Unable to extract video ID from URL.');
 
-  const transcriptLang = settings.transcriptLang || 'en';
+  const transcriptLang = job.lang || settings.transcriptLang || 'en';
   const noop = () => {};
 
   let result = null;

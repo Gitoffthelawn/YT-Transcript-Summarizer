@@ -415,7 +415,7 @@ async function addUrl() {
 
 async function addCurrentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || (!tab.url.includes('youtube.com/watch') && !tab.url.includes('youtu.be/'))) {
+  if (!tab || (!tab.url.includes('youtube.com/watch') && !tab.url.includes('youtu.be/') && !tab.url.includes('youtube.com/shorts/'))) {
     showMsg('Open a YouTube video in the current tab first.', 'error');
     return;
   }

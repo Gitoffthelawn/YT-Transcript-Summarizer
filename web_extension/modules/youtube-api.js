@@ -1,7 +1,7 @@
 import { CONFIG } from './config.js';
 import { fetchWithTimeout, findInObject, sleep } from './utils.js';
 
-export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'it') {
+export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en') {
   const clients = [
     { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 },
     { clientName: 'IOS', clientVersion: CONFIG.youtube.iosClientVersion, deviceModel: CONFIG.youtube.iosDeviceModel, deviceMake: 'Apple', osName: 'iPhone', osVersion: CONFIG.youtube.iosOsVersion, hl: 'en', gl: 'US' },
@@ -187,7 +187,7 @@ export async function fetchViaTimedText(videoId, log, lang = 'en') {
   return null;
 }
 
-export async function tabFetchTranscript(videoId, log, transcriptLang = 'it') {
+export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
   log(`Tab strategy for ${videoId}, lang="${transcriptLang}"`);
 
   const existingTabs = await chrome.tabs.query({ url: ['*://www.youtube.com/watch*', '*://youtu.be/*'] });
@@ -301,6 +301,8 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
                 : (tracks.find(t => t.languageCode?.startsWith(tLang)) ||
                    tracks.find(t => t.languageCode?.startsWith('en')) ||
                    tracks[0]);
+              if (!track?.baseUrl) { L('No baseUrl on track — skip'); }
+              else {
               const base = track.baseUrl.replace(/&fmt=[^&]*/g, '');
               for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
                 try {
@@ -321,6 +323,7 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
                     if (xmlLines.length > 0) return { title, transcript: xmlLines.join('\n'), log };
                   }
                 } catch (e) { L(`Fetch err: ${e.message}`); }
+              }
               }
             }
           }

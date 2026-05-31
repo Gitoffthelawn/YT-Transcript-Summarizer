@@ -60,8 +60,8 @@ export async function callLLM(transcript, settings) {
 async function callAnthropic(transcript, settings) {
   const trimmed = trimTranscript(transcript);
 
-  const THINKING_MODELS = ['claude-3-7-sonnet', 'claude-sonnet-4-6', 'claude-opus-4-7'];
-  const useThinking = settings.useThinking && THINKING_MODELS.some(m => settings.model.startsWith(m));
+  const THINKING_MODELS = ['claude-3-7-sonnet', 'claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-8'];
+  const useThinking = settings.useThinking && THINKING_MODELS.some(m => settings.model?.startsWith(m));
   const maxTokens = useThinking ? 16000 : 8192;
 
   const bodyObj = {

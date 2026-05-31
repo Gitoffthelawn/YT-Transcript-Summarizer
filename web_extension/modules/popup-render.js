@@ -166,7 +166,7 @@ export function renderJobs() {
   const dis = state.running ? 'disabled' : '';
 
   list.innerHTML = state.jobs.map(j => {
-    const hasCustom = !!j.prompt || (j.format != null) || (j.length != null);
+    const hasCustom = !!j.prompt || (j.format != null) || (j.length != null) || (j.lang != null);
     const activeFmt = j.format ?? globalFmt;
     const activeLen = j.length ?? globalLen;
 
