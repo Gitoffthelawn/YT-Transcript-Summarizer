@@ -41,7 +41,7 @@ The project ships as two complementary clients that share the same transcript-ex
 | Share to app (Web Share API, bypasses Android clipboard limit) | — | ✅ |
 | Video history | ✅ (No limit) | ✅ (No limit) |
 | Dark / light theme | ✅ | ✅ |
-| Languages | English, Italian, Spanish | 15 languages + YouTube auto-translate |
+| Languages | 15 languages + auto-translate | 15 languages + auto-translate |
 
 ---
 
@@ -57,7 +57,7 @@ When a video has no captions in the requested language the app automatically use
 
 ### Extension
 
-English, Italian, Spanish.
+Same 15 languages as the Web app.
 
 ---
 

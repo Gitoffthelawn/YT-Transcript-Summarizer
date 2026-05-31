@@ -18,7 +18,7 @@ A browser extension (Chrome/Firefox) that extracts transcripts from YouTube vide
 - **Video history** — log of all processed videos with timestamps and links
 - **Text-to-Speech** — read any text aloud directly from the popup, with voice and speed selection
 - **Dark / Light theme**
-- **Language preference** — prefer English, Italian, Spanish, or auto-detect transcript language
+- **Language preference** — 15 supported languages, or auto-detect transcript language
 
 ---
 
@@ -63,7 +63,7 @@ Select your provider from the tab bar at the top of the popup. Each provider has
 | **📄 Normal** | Complete and detailed, nothing omitted (default) |
 | **📖 Long** | In-depth, structured with headings, every section covered |
 
-Switching format or length automatically updates the prompt with the correct preset for your language (English, Italian, or Spanish). You can still edit the prompt manually.
+Switching format or length automatically updates the prompt with the correct preset for your language. You can still edit the prompt manually.
 
 ### Per-video settings
 
@@ -135,7 +135,7 @@ API keys are stored locally in browser storage and are only ever sent to the res
 
 Enable **📋 Auto-paste** to have the transcript automatically pasted into the chat input when the AI tab opens. Enable **↵ Auto-submit** to also press Send (implies auto-paste).
 
-Auto-paste is supported for Claude.ai, ChatGPT, and Gemini via dedicated content scripts.
+Auto-paste is supported for Claude.ai, ChatGPT, and Gemini via dedicated content scripts. The extension includes a robust retry mechanism to ensure successful auto-submission even if the AI web interface takes a few seconds to load.
 
 ### Custom / local endpoint
 

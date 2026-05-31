@@ -19,7 +19,17 @@
 
   if (autoSubmit) {
     await sleep(800);
-    if (!clickSend()) submitViaKey(input);
+    let attempts = 0;
+    let sent = false;
+    while (attempts < 6 && !sent) {
+      if (clickSend()) {
+        sent = true;
+      } else {
+        await sleep(500);
+        attempts++;
+      }
+    }
+    if (!sent) submitViaKey(input);
   }
 })();
 
