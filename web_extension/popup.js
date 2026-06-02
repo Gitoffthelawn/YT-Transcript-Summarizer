@@ -67,14 +67,14 @@ async function init() {
     'transcriptLang', 'customPrompt', 'mode',
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile',
     'outputFormat', 'summaryLength', 'jobs', 'running', 'theme',
-    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay'
+    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay', 'ttsLocalUrl'
   ]);
 
   const {
     transcriptLang, customPrompt, mode,
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile,
     outputFormat, summaryLength, jobs: savedJobs, running: savedRunning, theme,
-    ttsState, ttsRate, ttsVoice, ttsText, webDelay
+    ttsState, ttsRate, ttsVoice, ttsText, webDelay, ttsLocalUrl
   } = stored;
 
   // Migrate legacy apiKey → apiKeys.anthropic
@@ -110,6 +110,7 @@ async function init() {
   speechSynthesis.onvoiceschanged = () => populateTTSVoices(ttsVoice);
   if (ttsText) document.getElementById('tts-text').value = ttsText;
   if (ttsState) updateTTSStatus(ttsState);
+  if (ttsLocalUrl) document.getElementById('tts-local-url').value = ttsLocalUrl;
   document.getElementById('web-delay').value = webDelay ?? 30;
 
   if (transcriptLang) {
@@ -164,6 +165,9 @@ async function init() {
   document.getElementById('tts-text').addEventListener('input', e => {
     clearTimeout(ttsSaveTimer);
     ttsSaveTimer = setTimeout(() => chrome.storage.local.set({ ttsText: e.target.value }), 500);
+  });
+  document.getElementById('tts-local-url').addEventListener('input', e => {
+    chrome.storage.local.set({ ttsLocalUrl: e.target.value.trim() });
   });
   document.getElementById('btn-clear-history').addEventListener('click', clearHistory);
   document.getElementById('history-list').addEventListener('click', e => {

@@ -34,7 +34,9 @@
     "https://chatgpt.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://gemini.google.com/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "content_scripts": [
     {

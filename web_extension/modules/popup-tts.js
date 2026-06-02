@@ -16,19 +16,24 @@ export function sendTTS(msg) {
   try { if (state.port) state.port.postMessage(msg); } catch (_) {}
 }
 
-export function ttsPlay() {
+export async function ttsPlay() {
   const text = document.getElementById('tts-text').value.trim();
   if (!text) { showMsg('Paste some text to read aloud.', 'warn'); return; }
-  const rate = parseFloat(document.getElementById('tts-rate').value);
-  const voiceName = document.getElementById('tts-voice').value;
-  if (voiceName) chrome.storage.local.set({ ttsVoice: voiceName });
 
-  // Immediate feedback so the user knows the request was registered
   const playBtn = document.getElementById('tts-btn-play');
   const statusEl = document.getElementById('tts-status-text');
   if (playBtn) playBtn.disabled = true;
   if (statusEl) { statusEl.textContent = '◌ Starting…'; statusEl.className = 'tts-status-text'; }
 
+  const { ttsLocalUrl } = await chrome.storage.local.get('ttsLocalUrl');
+  if (ttsLocalUrl) {
+    sendTTS({ type: 'tts-speak-local', url: ttsLocalUrl, text });
+    return;
+  }
+
+  const rate = parseFloat(document.getElementById('tts-rate').value);
+  const voiceName = document.getElementById('tts-voice').value;
+  if (voiceName) chrome.storage.local.set({ ttsVoice: voiceName });
   sendTTS({ type: 'tts-speak', text, rate, voiceName: voiceName || undefined });
 }
 

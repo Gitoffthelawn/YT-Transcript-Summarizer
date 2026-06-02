@@ -16,7 +16,7 @@ A browser extension (Chrome/Firefox) that extracts transcripts from YouTube vide
 - **Combine all** — merge all queued transcripts into a single AI prompt
 - **Thinking mode** — extended reasoning for supported Claude models
 - **Video history** — log of all processed videos with timestamps and links
-- **Text-to-Speech** — read any text aloud directly from the popup, with voice and speed selection
+- **Text-to-Speech** — read any text aloud directly from the popup, with voice and speed selection; optional local TTS server support for higher-quality voices
 - **Dark / Light theme**
 - **Language preference** — 15 supported languages, or auto-detect transcript language
 
@@ -83,7 +83,9 @@ Available in API mode for supported Claude models (`claude-sonnet-4-6`, `claude-
 When enabled, all queued transcripts are merged into a single prompt and sent as one request — useful for comparing or cross-referencing multiple videos.
 
 ### 🔊 Text-to-Speech
-Click **🔊** in the header to open the TTS panel. Paste any text, select a voice, adjust speed (0.5×–2×), and hit **▶ Play**. You can change the speed while audio is playing; the new rate takes effect from the next passage. Supports pause and stop. Playback state persists across popup open/close.
+Click **🔊** in the header to open the TTS panel. Paste any text, select a voice, adjust speed (0.5×–2×), and hit **▶ Play**. You can change the speed while audio is playing; the new rate takes effect from the next passage. Supports pause and stop. Playback continues even when the popup is closed.
+
+**Local TTS server (optional):** Enter the URL of an OpenAI-compatible TTS endpoint in the **Local TTS server** field (e.g. `http://localhost:8880/v1/audio/speech` for [kokoro-fastapi](https://github.com/remsky/kokoro-fastapi)). When set, the extension sends a POST request with `{ "model": "tts-1", "input": "..." }` and plays back the returned audio — Voice and Speed controls do not apply in this mode. Leave the field empty to use the browser's built-in Web Speech API.
 
 ### 🌙 / ☀️ Theme
 Toggle dark/light theme from the header. Preference is saved.
@@ -191,7 +193,8 @@ If all four strategies fail, a `debug_<videoId>.txt` file is downloaded with ful
 | `downloads` | Save transcript and summary files |
 | `notifications` | Notify when batch processing completes |
 | `alarms` | Keep the service worker alive during long-running jobs |
-| `offscreen` | Text-to-Speech audio playback via Web Speech API |
+| `offscreen` | Text-to-Speech audio playback via Web Speech API or local TTS server |
+| `http://localhost/*`, `http://127.0.0.1/*` | Fetch audio from an optional local TTS server |
 
 ---
 

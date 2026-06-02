@@ -12,6 +12,12 @@ let watchdogTimer = null;
 let rateChangeTimer = null;
 let resumeInfinityTimer = null;
 
+let localPlayId = 0;
+let localAudioCtx = null;
+let localAudioSource = null;
+let isLocalPlaying = false;
+let isLocalPaused = false;
+
 const MAX_RETRIES = 3;
 const WATCHDOG_MS = 3500;
 const CANCEL_DELAY = 250;
@@ -26,6 +32,52 @@ function clearWatchdog() {
 
 function clearResumeInfinity() {
   if (resumeInfinityTimer) { clearInterval(resumeInfinityTimer); resumeInfinityTimer = null; }
+}
+
+function stopLocalAudio() {
+  if (localAudioSource) { try { localAudioSource.stop(); } catch (_) {} localAudioSource = null; }
+  if (localAudioCtx) { localAudioCtx.close().catch(() => {}); localAudioCtx = null; }
+  isLocalPlaying = false;
+  isLocalPaused = false;
+}
+
+async function playViaLocalServer(url, text) {
+  localPlayId++;
+  const id = localPlayId;
+  stopLocalAudio();
+  const cleanText = stripMarkdown(text);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'tts-1', input: cleanText, text: cleanText })
+    });
+    if (localPlayId !== id) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    if (localPlayId !== id) return;
+    localAudioCtx = new AudioContext();
+    const audioBuffer = await localAudioCtx.decodeAudioData(buf);
+    if (localPlayId !== id) return;
+    localAudioSource = localAudioCtx.createBufferSource();
+    localAudioSource.buffer = audioBuffer;
+    localAudioSource.connect(localAudioCtx.destination);
+    isLocalPlaying = true;
+    isLocalPaused = false;
+    localAudioSource.onended = () => {
+      if (localPlayId !== id) return;
+      isLocalPlaying = false;
+      isLocalPaused = false;
+      localAudioSource = null;
+      setState({ playing: false, paused: false });
+    };
+    localAudioSource.start();
+    setState({ playing: true, paused: false });
+  } catch (err) {
+    if (localPlayId !== id) return;
+    isLocalPlaying = false;
+    setState({ playing: false, paused: false, error: 'local_tts_error' });
+  }
 }
 
 function stripMarkdown(text) {
@@ -177,6 +229,8 @@ function doSpeak(text) {
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'tts-speak': {
+      localPlayId++;
+      stopLocalAudio();
       currentRate = msg.rate ?? currentRate;
       currentVoiceName = msg.voiceName || '';
       const cleanText = stripMarkdown(msg.text);
@@ -184,7 +238,29 @@ chrome.runtime.onMessage.addListener((msg) => {
       break;
     }
 
+    case 'tts-speak-local': {
+      clearWatchdog();
+      clearResumeInfinity();
+      if (rateChangeTimer) { clearTimeout(rateChangeTimer); rateChangeTimer = null; }
+      utteranceId++;
+      isActive = false;
+      isSpeechPlaying = false;
+      isSpeechPaused = false;
+      chunks = [];
+      chunkIndex = 0;
+      speechSynthesis.cancel();
+      utterance = null;
+      playViaLocalServer(msg.url, msg.text);
+      break;
+    }
+
     case 'tts-pause':
+      if (isLocalPlaying && !isLocalPaused && localAudioCtx) {
+        localAudioCtx.suspend().catch(() => {});
+        isLocalPaused = true;
+        setState({ playing: true, paused: true });
+        break;
+      }
       // Cancel-based pause: more reliable than speechSynthesis.pause() which
       // can silently fail. chunkIndex is preserved so resume restarts this chunk.
       if (!isSpeechPaused && isActive) {
@@ -200,6 +276,13 @@ chrome.runtime.onMessage.addListener((msg) => {
       break;
 
     case 'tts-resume':
+      if (isLocalPaused && localAudioCtx) {
+        localAudioCtx.resume().catch(() => {});
+        isLocalPaused = false;
+        isLocalPlaying = true;
+        setState({ playing: true, paused: false });
+        break;
+      }
       // Restart from the current chunk; any rate/voice changes made while
       // paused are automatically applied because speakChunk reads currentRate
       // and currentVoiceName fresh each time.
@@ -225,6 +308,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       chunkRetries = 0;
       speechSynthesis.cancel();
       utterance = null;
+      localPlayId++;
+      stopLocalAudio();
       setState({ playing: false, paused: false });
       break;
 
