@@ -162,7 +162,7 @@ export async function setJobLang(id, lang) {
 export function renderJobs() {
   const list = document.getElementById('job-list');
   if (state.jobs.length === 0) {
-    list.innerHTML = '<div class="empty-state">Add a URL or open a YouTube video and click 📌</div>';
+    list.innerHTML = '<div class="empty-state">Add a URL or open a YouTube video and click 📌<span class="empty-hint">Hover the mode tabs above for a description of each mode</span></div>';
     return;
   }
 
@@ -194,6 +194,18 @@ export function renderJobs() {
           <option value="en" ${j.lang === 'en' ? 'selected' : ''}>🇬🇧 EN</option>
           <option value="it" ${j.lang === 'it' ? 'selected' : ''}>🇮🇹 IT</option>
           <option value="es" ${j.lang === 'es' ? 'selected' : ''}>🇪🇸 ES</option>
+          <option value="fr" ${j.lang === 'fr' ? 'selected' : ''}>🇫🇷 FR</option>
+          <option value="de" ${j.lang === 'de' ? 'selected' : ''}>🇩🇪 DE</option>
+          <option value="pt" ${j.lang === 'pt' ? 'selected' : ''}>🇵🇹 PT</option>
+          <option value="zh" ${j.lang === 'zh' ? 'selected' : ''}>🇨🇳 ZH</option>
+          <option value="ja" ${j.lang === 'ja' ? 'selected' : ''}>🇯🇵 JA</option>
+          <option value="ko" ${j.lang === 'ko' ? 'selected' : ''}>🇰🇷 KO</option>
+          <option value="ar" ${j.lang === 'ar' ? 'selected' : ''}>🇸🇦 AR</option>
+          <option value="ru" ${j.lang === 'ru' ? 'selected' : ''}>🇷🇺 RU</option>
+          <option value="nl" ${j.lang === 'nl' ? 'selected' : ''}>🇳🇱 NL</option>
+          <option value="pl" ${j.lang === 'pl' ? 'selected' : ''}>🇵🇱 PL</option>
+          <option value="tr" ${j.lang === 'tr' ? 'selected' : ''}>🇹🇷 TR</option>
+          <option value="hi" ${j.lang === 'hi' ? 'selected' : ''}>🇮🇳 HI</option>
           <option value="auto" ${j.lang === 'auto' ? 'selected' : ''}>🌐 Auto</option>
         </select>
       </div>`;

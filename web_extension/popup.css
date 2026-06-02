@@ -110,8 +110,21 @@ body {
   transition: opacity 0.2s;
   border-radius: 6px;
   padding: 4px;
+  position: relative;
 }
 .icon-btn:hover { opacity: 1; }
+
+#btn-settings[data-warn="1"]::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  background: #ef4444;
+  border-radius: 50%;
+  pointer-events: none;
+}
 
 /* ── Panels ── */
 .panel {
@@ -283,6 +296,12 @@ textarea {
   font-size: 12px;
   border: 1px dashed var(--empty-border);
   border-radius: 10px;
+}
+.empty-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  opacity: 0.7;
 }
 
 /* ── Job Item ── */
@@ -806,7 +825,7 @@ body.dark .history-link { color: #a78bfa; }
 .job-edit-btn {
   background: none;
   border: none;
-  color: var(--remove-color);
+  color: var(--text2);
   cursor: pointer;
   font-size: 14px;
   padding: 2px 4px;

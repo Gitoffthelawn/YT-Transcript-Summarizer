@@ -10,6 +10,14 @@ const PANELS = ['panel-settings', 'panel-history', 'panel-tts'];
 
 let countdownInterval = null;
 
+async function updateApiKeyWarning() {
+  const mode = document.getElementById('mode-select').value;
+  const provider = document.getElementById('provider-select').value;
+  const { apiKeys = {} } = await chrome.storage.local.get('apiKeys');
+  const warn = mode === 'api' && !(apiKeys[provider] || '').trim();
+  document.getElementById('btn-settings').dataset.warn = warn ? '1' : '';
+}
+
 function startCountdown(nextJobAt) {
   clearInterval(countdownInterval);
   const bar = document.getElementById('countdown-bar');
@@ -166,7 +174,10 @@ async function init() {
   document.getElementById('btn-donate').addEventListener('click', () => {
     chrome.tabs.create({ url: 'https://paypal.me/RobertoReale12' });
   });
-  document.getElementById('btn-save-key').addEventListener('click', saveSettings);
+  document.getElementById('btn-save-key').addEventListener('click', async () => {
+    await saveSettings();
+    updateApiKeyWarning();
+  });
   document.getElementById('btn-add').addEventListener('click', addUrl);
   document.getElementById('btn-add-tab').addEventListener('click', addCurrentTab);
   document.getElementById('btn-run').addEventListener('click', startBatch);
@@ -218,6 +229,7 @@ async function init() {
         await chrome.storage.local.get(['apiKeys', 'models', 'customEndpointUrl']);
       await applyProvider(tab.dataset.provider, storedKeys, storedModels, customEndpointUrl);
       persistSettings();
+      updateApiKeyWarning();
     });
   });
 
@@ -236,6 +248,7 @@ async function init() {
       if (tab.classList.contains('disabled')) return;
       setMode(tab.dataset.mode);
       persistSettings();
+      updateApiKeyWarning();
     });
   });
 
@@ -334,6 +347,7 @@ async function init() {
   renderJobs();
   if (state.running) setUIAsRunning();
   connectPort();
+  updateApiKeyWarning();
 }
 
 if (document.readyState === 'loading') {

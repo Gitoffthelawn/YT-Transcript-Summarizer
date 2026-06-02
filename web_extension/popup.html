@@ -36,11 +36,11 @@
 <!-- Provider bar -->
 <div class="provider-bar">
   <div class="provider-tabs" id="provider-tabs">
-    <button class="provider-tab" data-provider="anthropic">Claude</button>
-    <button class="provider-tab" data-provider="openai">OpenAI</button>
-    <button class="provider-tab" data-provider="gemini">Gemini</button>
-    <button class="provider-tab" data-provider="openrouter">OpenRouter</button>
-    <button class="provider-tab" data-provider="custom">Custom</button>
+    <button class="provider-tab" data-provider="anthropic" title="Claude.ai (Web mode) or Anthropic API">Claude</button>
+    <button class="provider-tab" data-provider="openai" title="ChatGPT (Web mode) or OpenAI API">OpenAI</button>
+    <button class="provider-tab" data-provider="gemini" title="Gemini.google.com (Web mode) or Google AI Studio API">Gemini</button>
+    <button class="provider-tab" data-provider="openrouter" title="Any model via OpenRouter — API key required, no Web mode">OpenRouter</button>
+    <button class="provider-tab" data-provider="custom" title="Any OpenAI-compatible endpoint, e.g. Ollama or LM Studio">Custom</button>
   </div>
 </div>
 
@@ -156,19 +156,19 @@
 <!-- Inline Options Bar: mode + contextual toggles -->
 <div class="options-bar">
   <div class="mode-tabs" id="mode-tabs">
-    <button class="mode-tab" data-mode="web">🌐 Web</button>
-    <button class="mode-tab" data-mode="transcript">📄 Transcript</button>
-    <button class="mode-tab" data-mode="api">🤖 API</button>
+    <button class="mode-tab" data-mode="web" title="Opens Claude/ChatGPT in a new tab and pastes the transcript automatically">🌐 Web</button>
+    <button class="mode-tab" data-mode="transcript" title="Copies the raw transcript to clipboard — no AI needed">📄 Transcript</button>
+    <button class="mode-tab" data-mode="api" title="Sends the transcript directly to the AI via API key — no browser tab needed">🤖 API</button>
   </div>
   <div class="chips-row" id="inline-chips">
-    <button class="chip chip-fmt" id="chip-fmt-chat" data-fmt="chat">💬 Chat</button>
-    <button class="chip chip-fmt" id="chip-fmt-md" data-fmt="md">📄 .md</button>
+    <button class="chip chip-fmt" id="chip-fmt-chat" data-fmt="chat" title="Format the summary as plain chat text">💬 Chat</button>
+    <button class="chip chip-fmt" id="chip-fmt-md" data-fmt="md" title="Format the summary as a Markdown file (.md)">📄 .md</button>
     <span class="chips-sep"></span>
-    <button class="chip chip-len" id="chip-len-short" data-len="short">📝 Short</button>
-    <button class="chip chip-len" id="chip-len-normal" data-len="normal">📄 Normal</button>
-    <button class="chip chip-len" id="chip-len-long" data-len="long">📖 Long</button>
+    <button class="chip chip-len" id="chip-len-short" data-len="short" title="Short: key takeaways only (~3–5 bullet points)">📝 Short</button>
+    <button class="chip chip-len" id="chip-len-normal" data-len="normal" title="Normal: balanced summary with main points">📄 Normal</button>
+    <button class="chip chip-len" id="chip-len-long" data-len="long" title="Long: detailed, covers every section and argument">📖 Long</button>
     <span class="chips-sep"></span>
-    <select id="lang-select-inline" class="lang-select-inline" title="Transcript language">
+    <select id="lang-select-inline" class="lang-select-inline" title="Language for the transcript and the summary prompt">
       <option value="en">🇬🇧 EN</option>
       <option value="it">🇮🇹 IT</option>
       <option value="es">🇪🇸 ES</option>
@@ -187,11 +187,11 @@
       <option value="auto">🌐 Auto</option>
     </select>
     <span class="chips-sep"></span>
-    <button class="chip" id="chip-autopaste" data-cb="autopaste-cb">📋 Auto-paste</button>
-    <button class="chip" id="chip-autosubmit" data-cb="autosubmit-cb">↵ Auto-submit</button>
-    <button class="chip" id="chip-save-file" data-cb="save-file-cb" title="Save transcript .txt to Downloads folder">💾 Save .txt</button>
-    <button class="chip" id="chip-thinking" data-cb="thinking-cb">🧠 Thinking</button>
-    <button class="chip" id="chip-combine" data-cb="combined-prompt-cb" title="Send all video transcripts as a single combined message">📎 Combine all</button>
+    <button class="chip" id="chip-autopaste" data-cb="autopaste-cb" title="Automatically paste the transcript into the AI chat when the tab opens">📋 Auto-paste</button>
+    <button class="chip" id="chip-autosubmit" data-cb="autosubmit-cb" title="Automatically submit the message after pasting (Auto-paste is required and will be enabled)">↵ Auto-submit</button>
+    <button class="chip" id="chip-save-file" data-cb="save-file-cb" title="Save the raw transcript as a .txt file in your Downloads folder">💾 Save .txt</button>
+    <button class="chip" id="chip-thinking" data-cb="thinking-cb" title="Enable extended reasoning mode (Claude API only — uses more tokens and time)">🧠 Thinking</button>
+    <button class="chip" id="chip-combine" data-cb="combined-prompt-cb" title="Send all video transcripts as one combined message instead of one per video">📎 Combine all</button>
   </div>
 </div>
 
