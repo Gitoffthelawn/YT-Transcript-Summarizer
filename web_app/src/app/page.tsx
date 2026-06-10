@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import TranscriptForm from "@/components/TranscriptForm";
 import ActionButtons from "@/components/ActionButtons";
+import SettingsModal from "@/components/SettingsModal";
 import { getPreset, APP_VERSION } from "@/lib/config";
 
 // ── Cache constants ──────────────────────────────────────────────────────────
@@ -164,15 +165,23 @@ export default function Home() {
   const [pendingCacheChoice, setPendingCacheChoice] =
     useState<CacheChoice | null>(null);
   const [cacheCleared, setCacheCleared] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [apiKeys, setApiKeys] = useState<{ groq?: string; supadata?: string; transcriptApi?: string }>({});
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Load history and URL params on mount
+  // Load history, URL params, and API keys on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem("videoHistory");
       // eslint-disable-next-line react-hooks/set-state-in-effect
       if (saved) setHistory(JSON.parse(saved));
+      
+      setApiKeys({
+        groq: localStorage.getItem("GROQ_API_KEY") || undefined,
+        supadata: localStorage.getItem("SUPADATA_API_KEY") || undefined,
+        transcriptApi: localStorage.getItem("TRANSCRIPTAPI_KEY") || undefined,
+      });
     } catch {}
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get("url") || params.get("text");
@@ -247,7 +256,7 @@ export default function Home() {
       const res = await fetch("/api/transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, lang }),
+        body: JSON.stringify({ url, lang, apiKeys }),
         signal: ctrl.signal,
       });
 
@@ -486,6 +495,24 @@ export default function Home() {
           </svg>
         )}
       </button>
+
+      {/* Settings Button */}
+      <button
+        onClick={() => setIsSettingsOpen(true)}
+        className="absolute top-6 right-20 p-2 rounded-full bg-[var(--card-bg)] border border-[var(--card-border)] text-[var(--foreground)] shadow-sm hover:scale-105 active:scale-95 transition-all z-50"
+        aria-label="API Settings"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+        </svg>
+      </button>
+
+      <SettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        onSave={(keys) => setApiKeys(keys)} 
+      />
 
       <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
         <div className="absolute -top-[10%] -left-[10%] w-[50%] h-[50%] rounded-full bg-brand-500/10 blur-[100px]" />

@@ -7,6 +7,8 @@ import {
   fetchViaGetTranscript,
   fetchViaTimedText,
   fetchViaYoutubeTranscriptPackage,
+  fetchViaWhisperAI,
+  fetchViaTranscriptAPI,
 } from '@/lib/youtube-api';
 
 // Allow long-running extraction for videos up to 2+ hours (Vercel/serverless)
@@ -45,17 +47,21 @@ const SENTENCE_END_RE =
 
 export async function POST(request: Request) {
   // ── Synchronous validation (no streaming needed for instant errors) ─────
-  let body: { url?: string; lang?: string };
+  let body: { 
+    url?: string; 
+    lang?: string;
+    apiKeys?: { groq?: string; supadata?: string; transcriptApi?: string };
+  };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      { error: 'Invalid request body' },
+      { error: 'Invalid JSON body' },
       { status: 400 }
     );
   }
 
-  const { url, lang = 'en' } = body;
+  const { url, lang = 'en', apiKeys } = body;
 
   if (!url) {
     return NextResponse.json(
@@ -123,15 +129,17 @@ export async function POST(request: Request) {
       }, GLOBAL_TIMEOUT_MS);
 
       try {
-        // Strategy 0: Supadata (bypasses YouTube datacenter IP blocks)
-        try {
-          const r = await fetchViaSupadata(videoId, log, lang);
-          if (r) {
-            result = r;
-            strategy = 'Supadata';
+        // Strategy 0: Supadata API (Requires API Key in code or env)
+        if (shouldContinue()) {
+          try {
+            const r = await fetchViaSupadata(videoId, log, lang, apiKeys?.supadata);
+            if (r) {
+              result = r;
+              strategy = 'Supadata API';
+            }
+          } catch (e: any) {
+            log(`Supadata Error: ${e.message}`);
           }
-        } catch (e: any) {
-          log(`Supadata Error: ${e.message}`);
         }
 
         // Strategy 1: Piped / Invidious instance rotator
@@ -205,6 +213,33 @@ export async function POST(request: Request) {
             }
           } catch (e: any) {
             log(`youtube-transcript package Error: ${e.message}`);
+          }
+        }
+
+        // Strategy 6: Third-Party SaaS (TranscriptAPI.com)
+        if (shouldContinue()) {
+          try {
+            const r = await fetchViaTranscriptAPI(videoId, log, lang, apiKeys?.transcriptApi);
+            if (better(r)) {
+              result = r;
+              strategy = 'TranscriptAPI';
+            }
+          } catch (e: any) {
+            log(`TranscriptAPI Error: ${e.message}`);
+          }
+        }
+
+        // Strategy 7: Ultimate Fallback — Whisper AI (Groq + Audio Extract)
+        if (shouldContinue()) {
+          log('Trying Whisper AI fallback...');
+          try {
+            const r = await fetchViaWhisperAI(videoId, log, lang, apiKeys?.groq);
+            if (better(r)) {
+              result = r;
+              strategy = 'Whisper AI';
+            }
+          } catch (e: any) {
+            log(`Whisper AI Error: ${e.message}`);
           }
         }
 

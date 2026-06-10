@@ -7,11 +7,13 @@ import instances from './piped_instances.json';
 export async function fetchViaSupadata(
   videoId: string,
   log: (msg: string) => void,
-  lang = 'en'
+  lang = 'en',
+  customApiKey?: string
 ): Promise<{ title: string; transcript: string } | null> {
-  const apiKey = process.env.SUPADATA_API_KEY;
+  const apiKey = customApiKey || process.env.SUPADATA_API_KEY;
   if (!apiKey) {
-    log('Supadata: SUPADATA_API_KEY not set — skipping');
+    // We don't log "skipping" here by default to avoid clutter, 
+    // unless you want to explicitly notify the user
     return null;
   }
 
@@ -23,7 +25,7 @@ export async function fetchViaSupadata(
     const resp = await fetchWithTimeout(
       `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(videoUrl)}&lang=${l}&text=true`,
       { headers: { 'x-api-key': apiKey } },
-      20000
+      55000 // Increased timeout to 55s for Supadata since transcription can take long
     );
     const rawBody = await resp.text().catch(() => '');
     log(`Supadata [HTTP ${resp.status}] raw: ${rawBody.slice(0, 500)}`);
@@ -193,7 +195,7 @@ export async function fetchViaAndroidPlayer(
           contentCheckOk: true,
           racyCheckOk: true
         })
-      }, 15000);
+      }, 25000); // Increased timeout to 25s
 
       if (!resp.ok) { log(`${clientInfo.clientName}: HTTP ${resp.status} — skip`); continue; }
 
@@ -255,36 +257,57 @@ export async function fetchViaGetTranscript(
   let clientVersion = CONFIG.youtube.webClientVersion;
   let playerData: any = null;
 
-  try {
-    const pageResp = await fetchWithTimeout(
-      `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US`,
-      {
-        headers: {
-          'Accept-Language': 'en-US,en;q=0.9',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          // Bypass GDPR consent wall served to EU datacenter IPs
-          'Cookie': 'SOCS=CAI; CONSENT=YES+cb',
-        },
-      },
-      15000
-    );
-    if (pageResp.ok) {
-      const html = await pageResp.text();
-      log(`Page downloaded (${html.length} chars)`);
+  const CORS_PROXIES = [
+    '', // 1. Direct connection
+    'https://api.allorigins.win/raw?url=', // 2. AllOrigins
+    'https://corsproxy.io/?url=' // 3. Corsproxy.io
+  ];
 
-      playerData = extractYtInitialPlayerResponse(html);
-      if (playerData) {
-        title = playerData?.videoDetails?.title || videoId;
-        log(`Title: "${title}"`);
+  for (const proxy of CORS_PROXIES) {
+    const isProxy = proxy !== '';
+    const baseUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en&gl=US`;
+    const fetchUrl = isProxy ? `${proxy}${encodeURIComponent(baseUrl)}` : baseUrl;
+    
+    log(isProxy ? `Trying proxy: ${proxy}` : `Trying direct connection...`);
+    
+    try {
+      const pageResp = await fetchWithTimeout(
+        fetchUrl,
+        {
+          headers: {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            // Bypass GDPR consent wall served to EU datacenter IPs
+            'Cookie': 'SOCS=CAI; CONSENT=YES+cb',
+          },
+        },
+        25000 // 25s timeout per proxy attempt
+      );
+      if (pageResp.ok) {
+        const html = await pageResp.text();
+        log(`Page downloaded (${html.length} chars)`);
+
+        playerData = extractYtInitialPlayerResponse(html);
+        if (playerData) {
+          title = playerData?.videoDetails?.title || videoId;
+          log(`Title: "${title}"`);
+          const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/);
+          if (km) apiKey = km[1];
+          const vm = html.match(/"INNERTUBE_CLIENT_VERSION":\s*"([^"]+)"/);
+          if (vm) clientVersion = vm[1];
+          log(`apiKey=${apiKey.slice(0, 20)}..., clientVersion=${clientVersion}`);
+          
+          // Stop proxy rotation if we successfully extracted playerData
+          break; 
+        } else {
+          log(`No player data found in HTML (Bot challenge?). Retrying with next proxy...`);
+        }
+      } else {
+        log(`HTTP ${pageResp.status} from proxy. Retrying...`);
       }
-      const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/);
-      if (km) apiKey = km[1];
-      const vm = html.match(/"INNERTUBE_CLIENT_VERSION":\s*"([^"]+)"/);
-      if (vm) clientVersion = vm[1];
-      log(`apiKey=${apiKey.slice(0, 20)}..., clientVersion=${clientVersion}`);
-    }
-  } catch (e: any) { log(`Page error: ${e.message}`); }
+    } catch (e: any) { log(`Page error: ${e.message}`); }
+  }
 
   if (playerData) {
     const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
@@ -570,4 +593,130 @@ function parseGetTranscriptResponse(data: any, log: (msg: string) => void): stri
 
   log(`Segments found: ${segments.length}, valid lines: ${lines.length}`);
   return lines.length > 0 ? lines.join('\n') : null;
+}
+
+export async function fetchViaWhisperAI(
+  videoId: string,
+  log: (msg: string) => void,
+  lang = 'en',
+  customApiKey?: string
+): Promise<{ title: string; transcript: string } | null> {
+  const groqApiKey = customApiKey || process.env.GROQ_API_KEY;
+  if (!groqApiKey) {
+    log('Whisper AI: GROQ_API_KEY not set — skipping ultimate fallback');
+    return null;
+  }
+
+  log('Trying Ultimate Fallback: Whisper AI via Groq...');
+  try {
+    // 1. Get audio URL via Cobalt.tools API (free, open source downloader)
+    log('Whisper AI: Requesting audio stream from Cobalt API...');
+    const cobaltResp = await fetchWithTimeout('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Origin': 'https://cobalt.tools',
+        'Referer': 'https://cobalt.tools/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      body: JSON.stringify({
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        isAudioOnly: true,
+        aFormat: 'mp3'
+      })
+    }, 20000);
+
+    if (!cobaltResp.ok) {
+      log(`Whisper AI: Cobalt API HTTP ${cobaltResp.status}`);
+      return null;
+    }
+
+    const cobaltData = await cobaltResp.json();
+    if (!cobaltData?.url) {
+      log('Whisper AI: Audio URL not found in Cobalt response');
+      return null;
+    }
+
+    log('Whisper AI: Downloading audio stream...');
+    const audioResp = await fetchWithTimeout(cobaltData.url, {}, 45000);
+    if (!audioResp.ok) {
+      log(`Whisper AI: Audio download failed HTTP ${audioResp.status}`);
+      return null;
+    }
+
+    const audioBlob = await audioResp.blob();
+    log(`Whisper AI: Audio downloaded (${(audioBlob.size / 1024 / 1024).toFixed(2)} MB). Transcribing with Groq Whisper...`);
+
+    // 2. Transcribe via Groq API
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'audio.mp3');
+    formData.append('model', 'whisper-large-v3');
+    if (lang !== 'auto') {
+      formData.append('language', lang);
+    }
+
+    const groqResp = await fetchWithTimeout('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${groqApiKey}`
+      },
+      body: formData
+    }, 60000);
+
+    if (!groqResp.ok) {
+      log(`Whisper AI: Groq API HTTP ${groqResp.status}`);
+      const err = await groqResp.text().catch(() => '');
+      log(`Whisper AI: Groq Error: ${err}`);
+      return null;
+    }
+
+    const groqData = await groqResp.json();
+    if (groqData?.text) {
+      log(`Whisper AI: ✅ Transcribed successfully! (${groqData.text.length} chars)`);
+      return { title: videoId, transcript: groqData.text };
+    }
+
+    return null;
+  } catch (e: any) {
+    log(`Whisper AI: Exception: ${e.message}`);
+    return null;
+  }
+}
+
+export async function fetchViaTranscriptAPI(
+  videoId: string,
+  log: (msg: string) => void,
+  lang = 'en',
+  customApiKey?: string
+): Promise<{ title: string; transcript: string } | null> {
+  const apiKey = customApiKey || process.env.TRANSCRIPTAPI_KEY;
+  if (!apiKey) {
+    // Hidden log by default to avoid clutter, since this is an optional SaaS
+    return null;
+  }
+
+  log('Trying TranscriptAPI.com fallback...');
+  try {
+    const resp = await fetchWithTimeout(
+      `https://api.transcriptapi.com/v1/youtube/${videoId}?lang=${lang}`,
+      {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      },
+      20000
+    );
+    if (!resp.ok) {
+      log(`TranscriptAPI HTTP ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    if (data?.transcript) {
+      log(`TranscriptAPI: ✅ Transcribed successfully! (${data.transcript.length} chars)`);
+      return { title: videoId, transcript: data.transcript };
+    }
+    return null;
+  } catch (e: any) {
+    log(`TranscriptAPI: Exception: ${e.message}`);
+    return null;
+  }
 }
