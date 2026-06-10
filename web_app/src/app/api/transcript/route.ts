@@ -101,9 +101,10 @@ export async function POST(request: Request) {
 
       // ── Truncation heuristics ──────────────────────────────────────────
       const looksTruncated = (r: TranscriptResult | null): boolean => {
-        if (!r) return false;
-        const t = r.transcript.trimEnd();
-        return t.length >= TRUNCATION_MIN_LENGTH && !SENTENCE_END_RE.test(t);
+        // Auto-generated transcripts often lack punctuation at the end.
+        // We shouldn't assume a transcript is truncated just because of missing punctuation.
+        // Trust that if the API returned a large transcript, it's complete.
+        return false;
       };
 
       const better = (candidate: TranscriptResult | null): boolean => {
