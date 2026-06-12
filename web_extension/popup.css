@@ -555,6 +555,20 @@ body.dark .chip.on {
 .btn-run:active:not(:disabled) { transform: translateY(0); }
 .btn-run:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.btn-msg {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: rgba(234,179,8,0.2);
+  border: 1px solid rgba(234,179,8,0.4);
+  color: #fbbf24;
+  animation: fadeIn 0.2s ease;
+}
+.btn-msg.hidden { display: none; }
+
 .btn-row { display: flex; gap: 8px; align-items: stretch; }
 .btn-row .btn-run { flex: 1; }
 

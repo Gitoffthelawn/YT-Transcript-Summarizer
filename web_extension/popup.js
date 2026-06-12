@@ -482,7 +482,12 @@ async function startBatch() {
 
   const pending = state.jobs.filter(j => j.status === 'queued' || j.status === 'error');
   if (pending.length === 0) {
-    showMsg('No videos queued for processing.', 'warn');
+    const msgEl = document.getElementById('btn-msg');
+    if (msgEl) {
+      msgEl.textContent = 'No videos queued for processing.';
+      msgEl.classList.remove('hidden');
+      setTimeout(() => msgEl.classList.add('hidden'), 3000);
+    }
     return;
   }
 
