@@ -7,9 +7,25 @@ export function escHtml(str) {
 }
 
 export function showMsg(text, type = 'ok') {
+  const btnMsg  = document.getElementById('btn-msg');
+  const mainView = document.getElementById('main-view');
+
+  if (btnMsg && mainView && !mainView.classList.contains('hidden')) {
+    const isError = type === 'error';
+    const isWarn  = type === 'warn';
+    btnMsg.textContent  = text;
+    btnMsg.style.background   = isError ? 'rgba(239,68,68,0.2)'  : isWarn ? 'rgba(234,179,8,0.2)'  : 'rgba(34,197,94,0.2)';
+    btnMsg.style.borderColor  = isError ? 'rgba(239,68,68,0.4)'  : isWarn ? 'rgba(234,179,8,0.4)'  : 'rgba(34,197,94,0.4)';
+    btnMsg.style.color        = isError ? '#f87171'               : isWarn ? '#fbbf24'               : '#4ade80';
+    btnMsg.classList.remove('hidden');
+    clearTimeout(btnMsg._hideTimer);
+    btnMsg._hideTimer = setTimeout(() => btnMsg.classList.add('hidden'), 3000);
+    return;
+  }
+
+  // Fallback floating toast — used when main view is hidden (e.g. TTS panel open)
   const existing = document.getElementById('toast-msg');
   if (existing) existing.remove();
-
   const el = document.createElement('div');
   el.id = 'toast-msg';
   el.textContent = text;
