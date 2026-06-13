@@ -10,11 +10,7 @@ export const CONFIG = {
     // Known working client versions
     androidClientVersion: '20.10.38',
     androidSdkVersion: 34,
-    webClientVersion: '2.20240530.02.00',
-    iosClientVersion: '19.45.4',
-    iosDeviceModel: 'iPhone16,2',
-    iosOsVersion: '17.5.1.21F90',
-    tvClientVersion: '7.20231021.0.0'
+    webClientVersion: '2.20240530.02.00'
   },
 
   // ── Provider Web URLs ──────────────────────────────────────────────────────

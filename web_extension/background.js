@@ -1,6 +1,6 @@
 // ── background.js — Service Worker ───────────────────────────────────────────
 import { callLLM } from './modules/llm-api.js';
-import { fetchViaAndroidPlayer, fetchViaGetTranscript, fetchViaTimedText, tabFetchTranscript } from './modules/youtube-api.js';
+import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript } from './modules/youtube-api.js';
 import { CONFIG } from './modules/config.js';
 import { sleep } from './modules/utils.js';
 
@@ -187,45 +187,34 @@ async function processJob(job, settings) {
     debugLog += `Preferred transcript language: "${transcriptLang}"\n\n`;
     const effectivePrompt = job.prompt || settings.prompt;
 
-    // ── Strategy 1: InnerTube Player API (Android)
-    await updateJobStatus(job.id, 'active', '📱 Trying Android InnerTube...');
+    // ── Strategy 1: YouTube page scraping (most reliable with browser cookies)
+    await updateJobStatus(job.id, 'active', '📋 Fetching YouTube page...');
     try {
-      result = await fetchViaAndroidPlayer(videoId, (msg) => { debugLog += `[S1-Android] ${msg}\n`; }, transcriptLang);
-      if (result) debugLog += `[S1-Android] ✅ Success!\n`;
+      result = await fetchViaGetTranscript(videoId, (msg) => { debugLog += `[S1-PageScrape] ${msg}\n`; }, transcriptLang);
+      if (result) debugLog += `[S1-PageScrape] ✅ Success!\n`;
     } catch (e) {
-      debugLog += `[S1-Android] ❌ Exception: ${e.message}\n`;
+      debugLog += `[S1-PageScrape] ❌ Exception: ${e.message}\n`;
     }
 
-    // ── Strategy 2: get_transcript endpoint
+    // ── Strategy 2: InnerTube Player API (Android)
     if (!result) {
-      await updateJobStatus(job.id, 'active', '📋 Trying get_transcript API...');
+      await updateJobStatus(job.id, 'active', '📱 Trying Android InnerTube...');
       try {
-        result = await fetchViaGetTranscript(videoId, (msg) => { debugLog += `[S2-GetTranscript] ${msg}\n`; }, transcriptLang);
-        if (result) debugLog += `[S2-GetTranscript] ✅ Success!\n`;
+        result = await fetchViaAndroidPlayer(videoId, (msg) => { debugLog += `[S2-Android] ${msg}\n`; }, transcriptLang);
+        if (result) debugLog += `[S2-Android] ✅ Success!\n`;
       } catch (e) {
-        debugLog += `[S2-GetTranscript] ❌ Exception: ${e.message}\n`;
+        debugLog += `[S2-Android] ❌ Exception: ${e.message}\n`;
       }
     }
 
-    // ── Strategy 3: Legacy timedtext API
-    if (!result) {
-      await updateJobStatus(job.id, 'active', '📄 Trying timedtext API...');
-      try {
-        result = await fetchViaTimedText(videoId, (msg) => { debugLog += `[S3-Timedtext] ${msg}\n`; }, transcriptLang);
-        if (result) debugLog += `[S3-Timedtext] ✅ Success!\n`;
-      } catch (e) {
-        debugLog += `[S3-Timedtext] ❌ Exception: ${e.message}\n`;
-      }
-    }
-
-    // ── Strategy 4: Real tab (fallback)
+    // ── Strategy 3: Real tab (fallback)
     if (!result) {
       await updateJobStatus(job.id, 'active', '🔍 Opening YouTube tab (fallback)...');
       try {
-        result = await tabFetchTranscript(videoId, (msg) => { debugLog += `[S4-Tab] ${msg}\n`; }, transcriptLang);
-        if (result) debugLog += `[S4-Tab] ✅ Success!\n`;
+        result = await tabFetchTranscript(videoId, (msg) => { debugLog += `[S3-Tab] ${msg}\n`; }, transcriptLang);
+        if (result) debugLog += `[S3-Tab] ✅ Success!\n`;
       } catch (e) {
-        debugLog += `[S4-Tab] ❌ Exception: ${e.message}\n`;
+        debugLog += `[S3-Tab] ❌ Exception: ${e.message}\n`;
       }
     }
 
@@ -367,9 +356,8 @@ async function fetchTranscriptForJob(job, settings) {
   const noop = () => {};
 
   let result = null;
-  try { result = await fetchViaAndroidPlayer(videoId, noop, transcriptLang); } catch (_) {}
-  if (!result) { try { result = await fetchViaGetTranscript(videoId, noop, transcriptLang); } catch (_) {} }
-  if (!result) { try { result = await fetchViaTimedText(videoId, noop, transcriptLang); } catch (_) {} }
+  try { result = await fetchViaGetTranscript(videoId, noop, transcriptLang); } catch (_) {}
+  if (!result) { try { result = await fetchViaAndroidPlayer(videoId, noop, transcriptLang); } catch (_) {} }
   if (!result) { try { result = await tabFetchTranscript(videoId, noop, transcriptLang); } catch (_) {} }
 
   if (!result?.transcript) throw new Error('No transcript found.');

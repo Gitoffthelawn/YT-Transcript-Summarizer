@@ -3,9 +3,7 @@ import { fetchWithTimeout, findInObject, sleep } from './utils.js';
 
 export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en') {
   const clients = [
-    { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 },
-    { clientName: 'IOS', clientVersion: CONFIG.youtube.iosClientVersion, deviceModel: CONFIG.youtube.iosDeviceModel, deviceMake: 'Apple', osName: 'iPhone', osVersion: CONFIG.youtube.iosOsVersion, hl: 'en', gl: 'US' },
-    { clientName: 'TVHTML5', clientVersion: CONFIG.youtube.tvClientVersion, hl: 'en', gl: 'US' }
+    { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 }
   ];
 
   for (const clientInfo of clients) {
@@ -163,30 +161,6 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
   }
 }
 
-export async function fetchViaTimedText(videoId, log, lang = 'en') {
-  log('Trying timedtext API...');
-  const primary = lang === 'auto' ? 'en' : lang;
-  const candidates = [...new Set([primary, 'en'])];
-
-  for (const l of candidates) {
-    for (const extra of ['', '&kind=asr']) {
-      const url = `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${l}${extra}&fmt=json3`;
-      try {
-        const resp = await fetchWithTimeout(url, {}, 12000);
-        if (!resp.ok) { log(`timedtext ${l}${extra}: HTTP ${resp.status}`); continue; }
-        const text = await resp.text();
-        if (text.length < 10) { log(`timedtext ${l}${extra}: empty`); continue; }
-        const parsed = parseTranscriptText(text);
-        if (parsed) {
-          log(`timedtext ${l}${extra}: ✅ ${parsed.length} chars`);
-          return { title: videoId, transcript: parsed };
-        }
-      } catch (e) { log(`timedtext ${l}${extra}: ${e.message}`); }
-    }
-  }
-  return null;
-}
-
 export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
   log(`Tab strategy for ${videoId}, lang="${transcriptLang}"`);
 
@@ -226,7 +200,7 @@ export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
 
     const onUpdated = (id, changeInfo) => {
       if (id !== tabId) return;
-      if (changeInfo.status === 'complete') runScript(3000, 'loaded (complete)');
+      if (changeInfo.status === 'complete') runScript(500, 'loaded (complete)');
     };
 
     chrome.tabs.onUpdated.addListener(onUpdated);

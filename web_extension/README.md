@@ -12,7 +12,7 @@ A browser extension (Chrome/Firefox) that extracts transcripts from YouTube vide
 - **Per-video settings** — override format and summary length for each video individually
 - **Summary length** — Short, Normal, or Long presets, each with English and Italian prompts
 - **Output format** — Markdown (`.md`) or plain Chat format
-- **Reliable extraction** — four fallback strategies to handle YouTube's PO Token restrictions
+- **Reliable extraction** — three fallback strategies to handle YouTube's PO Token restrictions
 - **Combine all** — merge all queued transcripts into a single AI prompt
 - **Thinking mode** — extended reasoning for supported Claude models
 - **Video history** — log of all processed videos with timestamps and links
@@ -147,14 +147,13 @@ Select **Custom** as the provider, enter your endpoint URL (e.g. `http://localho
 
 ## Transcript extraction
 
-The extension tries four strategies in order, falling back to the next if one fails:
+The extension tries three strategies in order, falling back to the next if one fails:
 
-1. **InnerTube Android Player API** — uses the Android client context to bypass PO Token restrictions
-2. **Watch page + `get_transcript` endpoint** — downloads the watch page to extract caption URLs, then falls back to the InnerTube `get_transcript` API
-3. **Legacy Timedtext API** — calls the `/api/timedtext` endpoint directly
-4. **Real tab fallback** — opens the video in a background tab and reads the transcript from the page (reuses an existing tab if the video is already open)
+1. **Watch page + `get_transcript` endpoint** — downloads the watch page (with browser cookies) to extract fresh caption URLs, then falls back to the InnerTube `get_transcript` API
+2. **InnerTube Android Player API** — calls the Android client endpoint directly (works when YouTube allows unauthenticated requests)
+3. **Real tab fallback** — opens the video in a background tab and reads the transcript from the page (reuses an existing tab if the video is already open)
 
-If all four strategies fail, a `debug_<videoId>.txt` file is downloaded with full diagnostic output.
+If all three strategies fail, a `debug_<videoId>.txt` file is downloaded with full diagnostic output.
 
 ---
 
@@ -214,7 +213,7 @@ logo.png                Extension icon
 modules/
   config.js             Providers, prompts, YouTube API config
   llm-api.js            AI provider integrations
-  youtube-api.js        Transcript extraction strategies (4 strategies)
+  youtube-api.js        Transcript extraction strategies (3 strategies)
   popup-state.js        Shared mutable state object for popup modules
   popup-history.js      History panel logic
   popup-tts.js          TTS panel logic
@@ -230,7 +229,7 @@ modules/
 
 ### Duplicate-tab prevention extensions
 
-Extensions like *Prevent Duplicate Tabs* can block Strategy 4 (tab fallback) from opening a YouTube background tab. The extension already minimises this by reusing an open tab for the video if one exists — so the conflict only occurs when Strategies 1–3 all failed **and** the video isn't already open in a tab.
+Extensions like *Prevent Duplicate Tabs* can block Strategy 4 (tab fallback) from opening a YouTube background tab. The extension already minimises this by reusing an open tab for the video if one exists — so the conflict only occurs when Strategies 1–2 all failed **and** the video isn't already open in a tab.
 
 **Fix:** add `youtube.com` to the allowlist of the duplicate-tab extension.
 
