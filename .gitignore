@@ -23,6 +23,9 @@ web app/.env
 web app/.env.local
 web app/.env.*.local
 
+# Web extension build artifact
+web_extension/web_extension.zip
+
 # Logs
 *.log
 npm-debug.log*
