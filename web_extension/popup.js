@@ -480,15 +480,25 @@ async function startBatch() {
   const { apiKeys = {}, provider = 'anthropic' } =
     await chrome.storage.local.get(['apiKeys', 'provider']);
 
-  const pending = state.jobs.filter(j => j.status === 'queued' || j.status === 'error');
+  let pending = state.jobs.filter(j => j.status === 'queued' || j.status === 'error');
   if (pending.length === 0) {
-    const msgEl = document.getElementById('btn-msg');
-    if (msgEl) {
-      msgEl.textContent = 'No videos queued for processing.';
-      msgEl.classList.remove('hidden');
-      setTimeout(() => msgEl.classList.add('hidden'), 3000);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && (tab.url.includes('youtube.com/watch') || tab.url.includes('youtu.be/') || tab.url.includes('youtube.com/shorts/'))) {
+      const cleanTitle = tab.title ? tab.title.replace(/ - YouTube$/, '').trim() : null;
+      const newJob = { id: Date.now(), url: tab.url, title: cleanTitle || null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
+      state.jobs.push(newJob);
+      await chrome.storage.local.set({ jobs: state.jobs });
+      renderJobs();
+      pending = [newJob];
+    } else {
+      const msgEl = document.getElementById('btn-msg');
+      if (msgEl) {
+        msgEl.textContent = 'No videos queued for processing.';
+        msgEl.classList.remove('hidden');
+        setTimeout(() => msgEl.classList.add('hidden'), 3000);
+      }
+      return;
     }
-    return;
   }
 
   await persistSettings();
