@@ -1,6 +1,12 @@
 import { CONFIG } from './config.js';
 import { fetchWithTimeout, findInObject, sleep } from './utils.js';
 
+// Requests below rely on rules.json rewriting the Origin/Referer headers to
+// look like they came from youtube.com — Chrome's real "chrome-extension://"
+// Origin gets a hard 403 from YouTube on these endpoints otherwise.
+// They also deliberately send no cookies: with real session cookies attached,
+// YouTube returns fewer (or zero) caption tracks for the ANDROID client than
+// it does for a cookie-less request — verified by testing both side by side.
 export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en') {
   const clients = [
     { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 }
@@ -126,6 +132,11 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
     }
   }
 
+  // Last-resort, WEB-client only: even with a fixed Origin this endpoint tends to
+  // 400 "Precondition check failed" because our hand-built `params` blob lacks
+  // whatever session/continuation data real page navigation would supply.
+  // Kept as a fallback since it occasionally still works; ANDROID (above) is
+  // the strategy that reliably returns transcripts.
   log(`Falling back to get_transcript API...`);
   const params = encodeTranscriptParams(videoId);
   log(`params (base64): ${params}`);
@@ -168,6 +179,11 @@ export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
   const existingTabs = await chrome.tabs.query({ url: ['*://www.youtube.com/watch*', '*://youtu.be/*'] });
   const existingTab = existingTabs.find(t => t.url?.includes(videoId) && t.status === 'complete');
   if (existingTab) {
+    // The tab's URL can still contain our videoId while its content has moved on
+    // (e.g. autoplay advanced to a related video) — runTabScript sets `mismatch`
+    // when the page's own videoDetails.videoId disagrees with what we asked for.
+    // Only then do we fall through and open a dedicated tab; any other failure
+    // (no captions, script error) is a genuine result, not reused-tab flakiness.
     log(`Reusing existing tab id=${existingTab.id}`);
     const reusedResult = await runTabScript(existingTab.id, videoId, transcriptLang, log);
     if (reusedResult?.transcript) return reusedResult;
