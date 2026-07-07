@@ -111,7 +111,7 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
         const baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
         for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
           try {
-            const tResp = await fetchWithTimeout(baseUrl + suffix, {}, 12000);
+            const tResp = await fetchWithTimeout(baseUrl + suffix, { credentials: 'include' }, 12000);
             if (!tResp.ok) continue;
             const text = await tResp.text();
             if (text.length < 10) continue;
@@ -135,6 +135,7 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
       `https://www.youtube.com/youtubei/v1/get_transcript?key=${apiKey}&prettyPrint=false`,
       {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US' } },
@@ -168,7 +169,10 @@ export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
   const existingTab = existingTabs.find(t => t.url?.includes(videoId) && t.status === 'complete');
   if (existingTab) {
     log(`Reusing existing tab id=${existingTab.id}`);
-    return runTabScript(existingTab.id, videoId, transcriptLang, log);
+    const reusedResult = await runTabScript(existingTab.id, videoId, transcriptLang, log);
+    if (reusedResult?.transcript) return reusedResult;
+    if (!reusedResult?.mismatch) return reusedResult;
+    log('Reused tab was showing a different video — opening a fresh tab instead');
   }
 
   return new Promise((resolve) => {
@@ -248,6 +252,7 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
         try {
           const resp = await fetch('/youtubei/v1/player', {
             method: 'POST',
+            credentials: 'omit',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               context: {
@@ -266,6 +271,9 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
           L(`Android API HTTP: ${resp.status}`);
           if (resp.ok) {
             const data = await resp.json();
+            if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
+              L(`Wrong video in Android response (found ${data.videoDetails.videoId}, expected ${vid}) — skip`);
+            } else {
             const title = data?.videoDetails?.title || vid;
             const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
             L(`tracks=${tracks.length}`);
@@ -280,7 +288,7 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
               const base = track.baseUrl.replace(/&fmt=[^&]*/g, '');
               for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
                 try {
-                  const r = await fetch(base + suffix);
+                  const r = await fetch(base + suffix, { credentials: 'omit' });
                   const txt = await r.text();
                   L(`Transcript fetch: HTTP ${r.status}, length ${txt.length}`);
                   if (txt.length > 10) {
@@ -299,6 +307,7 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
                 } catch (e) { L(`Fetch err: ${e.message}`); }
               }
               }
+            }
             }
           }
         } catch (e) { L(`Android API error: ${e.message}`); }
@@ -331,6 +340,11 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
 
         if (!data) { L('ytInitialPlayerResponse not found'); return { title: vid, transcript: null, log }; }
 
+        if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
+          L(`Wrong video in tab (found ${data.videoDetails.videoId} "${data?.videoDetails?.title}", expected ${vid}) — tab shows a different video`);
+          return { title: vid, transcript: null, log, mismatch: true };
+        }
+
         const title = data?.videoDetails?.title || vid;
         const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
         L(`ytInitialPlayerResponse OK: title="${title}", tracks=${tracks.length}`);
@@ -346,7 +360,7 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
         const base = track.baseUrl.replace(/&fmt=[^&]*/g, '');
         for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
           try {
-            const r = await fetch(base + suffix);
+            const r = await fetch(base + suffix, { credentials: 'omit' });
             const txt = await r.text();
             L(`Transcript HTTP ${r.status}, length ${txt.length}`);
             if (txt.length < 10) { L('Empty body'); continue; }
@@ -373,6 +387,10 @@ async function runTabScript(tabId, videoId, transcriptLang, log) {
     if (tabResult?.transcript) {
       log(`Transcript found (${tabResult.transcript.length} chars)`);
       return tabResult;
+    }
+    if (tabResult?.mismatch) {
+      log('Reused tab shows a different video');
+      return { transcript: null, mismatch: true };
     }
     log('No transcript from tab');
     return null;
