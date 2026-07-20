@@ -1,8 +1,8 @@
 // ── background.js — Service Worker ───────────────────────────────────────────
 import { callLLM } from './modules/llm-api.js';
-import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript } from './modules/youtube-api.js';
+import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript, tabBrowseContinuations } from './modules/youtube-api.js';
 import { CONFIG } from './modules/config.js';
-import { sleep } from './modules/utils.js';
+import { sleep, fetchWithTimeout } from './modules/utils.js';
 
 let popupPort = null;
 let isRunning = false;
@@ -589,48 +589,43 @@ function extractYtInitialData(html) {
   return null;
 }
 
-function findContinuationToken(root) {
-  const cir = deepFind(root, 'continuationItemRenderer');
-  return cir ? deepFind(cir, 'token') : null;
+// The "load more" token for a playlist lives in a continuationItemRenderer that
+// sits in the SAME array as the video items. ytInitialData contains several
+// unrelated continuationItemRenderers (header shelves, related sections); a
+// plain first-match deepFind often returns one of those, whose token fetches
+// something other than the next playlist page — so the loop makes no progress
+// and stops at the first 100. Scope the search to the array holding the videos.
+function isPlaylistVideoNode(n) {
+  return !!(n && typeof n === 'object' && (n.playlistVideoRenderer
+    || (n.lockupViewModel && n.lockupViewModel.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO')));
 }
-
-// Page through a playlist via the InnerTube browse API (cleaner and much
-// lighter than downloading the full HTML page). Returns [{ videoId, title }].
-async function browsePlaylist(listId, apiKey, clientVersion) {
-  const seen = new Set();
-  const videos = [];
-  const call = (body) => fetchWithTimeout(
-    `https://www.youtube.com/youtubei/v1/browse?key=${apiKey}&prettyPrint=false`,
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US' } },
-        ...body
-      })
-    },
-    15000
-  );
-
-  let resp = await call({ browseId: 'VL' + listId });
-  if (!resp.ok) throw new Error(`browse HTTP ${resp.status}`);
-  let data = await resp.json();
-  collectPlaylistVideos(data, videos, seen);
-
-  let token = findContinuationToken(data);
-  let guard = 0;
-  while (token && videos.length < PLAYLIST_MAX && guard < 60) {
-    guard++;
-    const before = videos.length;
-    resp = await call({ continuation: token });
-    if (!resp.ok) break;
-    data = await resp.json();
-    collectPlaylistVideos(data, videos, seen);
-    if (videos.length === before) break; // no progress — stop
-    token = findContinuationToken(data);
+function tokenFromContinuationItem(cir) {
+  return cir?.continuationEndpoint?.continuationCommand?.token
+    || cir?.button?.buttonRenderer?.command?.continuationCommand?.token
+    || deepFind(cir, 'token') || null;
+}
+function findContinuationToken(root) {
+  let found = null;
+  const walk = (node) => {
+    if (found || !node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      if (node.some(isPlaylistVideoNode)) {
+        const cir = node.find(x => x?.continuationItemRenderer)?.continuationItemRenderer;
+        const t = cir && tokenFromContinuationItem(cir);
+        if (t) { found = t; return; }
+      }
+      for (const n of node) walk(n);
+      return;
+    }
+    for (const k in node) walk(node[k]);
+  };
+  walk(root);
+  // Fall back to the old global search if the scoped one came up empty.
+  if (!found) {
+    const cir = deepFind(root, 'continuationItemRenderer');
+    found = cir ? deepFind(cir, 'token') : null;
   }
-  return videos;
+  return found;
 }
 
 async function expandPlaylist(url) {
@@ -639,41 +634,100 @@ async function expandPlaylist(url) {
   if (!listId) throw new Error('No playlist id in URL');
   if (/^RD/.test(listId)) throw new Error('Mix/radio playlists are auto-generated and cannot be expanded');
 
-  // Fast path: browse API with the shipped InnerTube key.
-  let videos = [];
-  try {
-    videos = await browsePlaylist(listId, CONFIG.youtube.apiKey, CONFIG.youtube.webClientVersion);
-  } catch { videos = []; }
+  const seen = new Set();
+  const videos = [];
+  let total = null; // videos the playlist declares it has (may exceed what we load)
+  let contDbg = null; // continuation diagnostics, surfaced when we can't load them all
+  let dupes = 0; // playlist entries that repeat a video we already have
 
-  // Fallback: if the shipped key/version has rotated, refresh both from the
-  // live playlist page and retry; as a last resort parse the page directly.
-  if (videos.length === 0) {
-    try {
-      const pageResp = await fetchWithTimeout(
-        `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
-        { credentials: 'include', headers: { 'Accept-Language': 'en-US,en;q=0.9' } },
-        15000
-      );
-      if (pageResp.ok) {
-        const html = await pageResp.text();
-        let apiKey = CONFIG.youtube.apiKey, clientVersion = CONFIG.youtube.webClientVersion;
-        const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/); if (km) apiKey = km[1];
-        const vm = html.match(/"INNERTUBE_CLIENT_VERSION":\s*"([^"]+)"/); if (vm) clientVersion = vm[1];
-        try { videos = await browsePlaylist(listId, apiKey, clientVersion); } catch { videos = []; }
-        if (videos.length === 0) {
-          const data = extractYtInitialData(html);
-          if (data) { const seen = new Set(); collectPlaylistVideos(data, videos, seen); }
+  // Scrape the playlist HTML page for the first ~100 videos. Hitting
+  // /youtubei/v1/browse straight from the service worker gets served Google's
+  // "Sorry" anti-abuse 403 (the chrome-extension Origin trips it, and the
+  // declarativeNetRequest Origin rewrite doesn't reliably apply here), so we read
+  // the plain HTML page instead — it embeds ytInitialData with the first page —
+  // and page through the rest, when the playlist is longer, from a YouTube tab.
+  //
+  // credentials:'include' is required: an anonymous request from an EU visitor
+  // is redirected to consent.youtube.com (not in host_permissions, so the fetch
+  // then fails CORS). Sending the browser's existing consent cookie keeps the
+  // request on www.youtube.com, whose host permission makes the response readable.
+  try {
+    const pageResp = await fetchWithTimeout(
+      `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
+      { credentials: 'include', headers: { 'Accept-Language': 'en-US,en;q=0.9' } },
+      15000
+    );
+    if (pageResp.ok) {
+      const html = await pageResp.text();
+      let apiKey = CONFIG.youtube.apiKey, clientVersion = CONFIG.youtube.webClientVersion;
+      const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/); if (km) apiKey = km[1];
+      const vm = html.match(/"INNERTUBE_CLIENT_VERSION":\s*"([^"]+)"/); if (vm) clientVersion = vm[1];
+      const data = extractYtInitialData(html);
+      if (data) {
+        // The playlist's declared size. Different layouts expose it under
+        // different keys (e.g. numVideosText = "26 videos"), so try each in turn,
+        // then fall back to scraping the raw HTML for an "N videos" string.
+        const parseCount = (v) => {
+          const s = v?.runs?.map(r => r.text).join('') || v?.simpleText || v?.content || '';
+          const m = s.replace(/[.,](?=\d{3}\b)/g, '').match(/\d+/);
+          return m ? parseInt(m[0], 10) : NaN;
+        };
+        let n = NaN;
+        for (const key of ['numVideosText', 'videoCountText', 'videoCountShortText', 'stats']) {
+          n = parseCount(deepFind(data, key));
+          if (Number.isFinite(n)) break;
+        }
+        if (!Number.isFinite(n)) {
+          const hm = html.match(/([\d.,]+)\s*videos?\b/i);
+          if (hm) n = parseInt(hm[1].replace(/[.,]/g, ''), 10);
+        }
+        if (Number.isFinite(n)) total = n;
+        collectPlaylistVideos(data, videos, seen);
+        const token = findContinuationToken(data);
+        // Finish longer playlists from a real youtube.com tab, where the browse
+        // continuation endpoint isn't hit with the anti-abuse 403. Attempt this
+        // whenever the first page looks full even if we couldn't parse a token
+        // here — the tab derives a valid token from its own live ytInitialData.
+        const firstPage = videos.length;
+        const shouldPage = firstPage < PLAYLIST_MAX && (token || firstPage >= 90 || (total && total > firstPage));
+        console.log(`[playlist] listId=${listId} firstPage=${firstPage} declaredTotal=${total} htmlToken=${token ? 'yes' : 'no'} paging=${shouldPage ? 'yes' : 'no'}`);
+        if (shouldPage) {
+          const more = await tabBrowseContinuations(listId, token, apiKey, clientVersion, PLAYLIST_MAX, msg => {
+            console.log('[playlist]', msg);
+            const dm = /continuations dbg:\s*(\{.*\})/.exec(msg);
+            if (dm) { try { contDbg = JSON.parse(dm[1]); } catch { /* keep null */ } }
+          });
+          for (const v of more.videos) {
+            if (v?.videoId && !seen.has(v.videoId)) { seen.add(v.videoId); videos.push(v); }
+          }
+          // The live playlist tab reads the declared size more reliably than the
+          // background HTML fetch; trust it when it isn't below what we loaded.
+          if (Number.isFinite(more.total) && more.total >= videos.length) total = more.total;
+          dupes = more.dupes || 0;
+          console.log(`[playlist] after continuations: ${videos.length} videos (added ${videos.length - firstPage}, dupes ${dupes})`);
         }
       }
-    } catch { /* ignore — handled by the empty check below */ }
-  }
+    }
+  } catch (e) { console.log('[playlist] expand error:', e?.message || e); }
 
   if (videos.length === 0) throw new Error('No videos found (private, empty, or unavailable playlist)');
 
-  const truncated = videos.length > PLAYLIST_MAX;
   const out = videos.slice(0, PLAYLIST_MAX).map(v => ({
     url: `https://www.youtube.com/watch?v=${v.videoId}`,
     title: v.title
   }));
-  return { videos: out, count: out.length, truncated };
+  // "truncated" = we couldn't load every video the playlist claims to have
+  // (hit PLAYLIST_MAX, or continuations were blocked past the first page).
+  if (total == null || out.length > total) total = out.length;
+  // If unique videos + repeats accounts for the declared total, we actually
+  // loaded the whole playlist — the shortfall is just duplicate entries we
+  // (correctly) collapsed, so it isn't truncated.
+  const allSeen = out.length + dupes >= total;
+  const truncated = out.length < total && !allSeen;
+  // A non-2xx continuation status means YouTube actively blocked a page. If every
+  // fetch was fine and we simply ran out, the shortfall is unavailable videos
+  // (private/deleted) that the playlist still counts in its total.
+  const blocked = !!(contDbg?.statuses?.some(s => !/:2\d\d$/.test(String(s))));
+  console.log(`[playlist] result: ${out.length}/${total} dupes=${dupes} truncated=${truncated} blocked=${blocked}`, contDbg || '(no continuation dbg)');
+  return { videos: out, count: out.length, total, dupes, truncated, blocked, contDbg };
 }

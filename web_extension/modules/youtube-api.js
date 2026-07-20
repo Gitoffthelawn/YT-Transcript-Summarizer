@@ -488,3 +488,260 @@ function parseGetTranscriptResponse(data, log) {
   log(`Segments found: ${segments.length}, valid lines: ${lines.length}`);
   return lines.length > 0 ? lines.join('\n') : null;
 }
+
+// ── Playlist continuations (long playlists) ──────────────────────────────────
+// The InnerTube /browse continuation endpoint answers the service worker with
+// Google's anti-abuse "Sorry" 403 (the chrome-extension Origin trips it), so
+// pages past the first ~100 videos can't be fetched directly from the background.
+// They fetch fine from a real youtube.com page context, though: we reuse an
+// already-open YouTube tab when there is one (no visible flash), otherwise open
+// a throwaway background tab, run the continuation loop in the page's MAIN world,
+// and collect the rest. Best-effort — returns whatever it got (possibly []),
+// never throws, so the caller keeps its first-page results on any failure.
+export async function tabBrowseContinuations(listId, startToken, apiKey, clientVersion, max, log = () => {}) {
+  // Runs in the page (MAIN world): loops the browse continuation from youtube.com
+  // itself. Self-contained — it can't reference anything from the extension.
+  const injected = async (fallbackKey, fallbackCv, startToken, max, listId) => {
+    // Prefer the page's own InnerTube config (real API key, client version and
+    // visitorData) over a reconstructed WEB context — sending exactly what
+    // youtube.com sends is what keeps the continuation off the anti-abuse 403.
+    const ytcfgGet = (k) => {
+      try { if (window.ytcfg?.get) { const v = window.ytcfg.get(k); if (v != null) return v; } } catch { /* fall through */ }
+      return window.ytcfg?.data_?.[k];
+    };
+    const pageKey = ytcfgGet('INNERTUBE_API_KEY');
+    const pageContext = ytcfgGet('INNERTUBE_CONTEXT');
+    const apiKey = pageKey || fallbackKey;
+    const baseContext = pageContext
+      ? JSON.parse(JSON.stringify(pageContext))
+      : { client: { clientName: 'WEB', clientVersion: fallbackCv, hl: 'en', gl: 'US' } };
+    const out = [];
+    const seen = new Set();
+    let dupes = 0; // playlist entries whose video we already have (the same video listed twice)
+    let countDupes = true; // off during the logged-in second pass (which re-sees the same videos)
+    const isVideoId = (s) => typeof s === 'string' && /^[\w-]{11}$/.test(s);
+    const skippedLockup = {}; // contentType -> count, for diagnosing missed items
+    const add = (videoId, title) => {
+      if (!isVideoId(videoId)) return;
+      if (seen.has(videoId)) { if (countDupes) dupes++; return; }
+      seen.add(videoId); out.push({ videoId, title: title || null });
+    };
+    const collect = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const n of node) collect(n); return; }
+      const lv = node.lockupViewModel;
+      if (lv?.contentId) {
+        // Accept any lockup whose id is a video id and that isn't explicitly a
+        // playlist/channel lockup — YouTube uses several VIDEO-ish contentTypes
+        // (music, podcast episodes, …) and requiring the exact VIDEO enum drops
+        // some real entries. Record what we skip so misses are diagnosable.
+        const ct = lv.contentType || '';
+        if (isVideoId(lv.contentId) && !/PLAYLIST|CHANNEL|SHOW/.test(ct)) {
+          add(lv.contentId, lv.metadata?.lockupMetadataViewModel?.title?.content);
+        } else if (!seen.has(lv.contentId)) {
+          skippedLockup[ct || '(none)'] = (skippedLockup[ct || '(none)'] || 0) + 1;
+        }
+      }
+      // Classic renderers that carry a videoId directly.
+      for (const key of ['playlistVideoRenderer', 'videoRenderer', 'gridVideoRenderer', 'playlistPanelVideoRenderer']) {
+        const r = node[key];
+        if (r?.videoId) add(r.videoId, r.title?.runs?.map(x => x.text).join('') || r.title?.simpleText || null);
+      }
+      for (const k in node) {
+        if (k === 'lockupViewModel' || k === 'playlistVideoRenderer' || k === 'videoRenderer'
+          || k === 'gridVideoRenderer' || k === 'playlistPanelVideoRenderer') continue;
+        collect(node[k]);
+      }
+    };
+    const deepFind = (node, key, depth = 30) => {
+      if (!node || typeof node !== 'object' || depth < 0) return null;
+      if (node[key] !== undefined) return node[key];
+      for (const v of Object.values(node)) { if (v && typeof v === 'object') { const f = deepFind(v, key, depth - 1); if (f != null) return f; } }
+      return null;
+    };
+    // Collect EVERY continuation token anywhere in a response, regardless of
+    // nesting or wrapper renderer. YouTube's playlist grid keeps moving where the
+    // "load more" token lives (continuationItemRenderer, richGrid wrappers, …),
+    // so instead of guessing the path we gather all candidates and just try them.
+    const collectTokens = (node, acc, seenT, depth = 40) => {
+      if (!node || typeof node !== 'object' || depth < 0) return acc;
+      if (Array.isArray(node)) { for (const n of node) collectTokens(n, acc, seenT, depth - 1); return acc; }
+      const t = node.continuationCommand?.token
+        || node.continuationEndpoint?.continuationCommand?.token
+        || node.nextContinuationData?.continuation
+        || node.reloadContinuationData?.continuation;
+      if (typeof t === 'string' && t.length > 10 && !seenT.has(t)) { seenT.add(t); acc.push(t); }
+      for (const k in node) collectTokens(node[k], acc, seenT, depth - 1);
+      return acc;
+    };
+    const tokensIn = (root) => collectTokens(root, [], new Set());
+
+    // Read the playlist's declared size from the live page (more reliable than
+    // the background's HTML fetch). Only trust a value that isn't below what we
+    // already see, so a stray "1 video" elsewhere on the page can't win.
+    const parseTotal = (root, floor) => {
+      for (const key of ['numVideosText', 'videoCountText', 'stats', 'videoCountShortText']) {
+        const v = deepFind(root, key);
+        const arr = Array.isArray(v) ? v : [v];
+        for (const item of arr) {
+          const s = item?.runs?.map(r => r.text).join('') || item?.simpleText || item?.content || '';
+          const m = s.replace(/[.,](?=\d{3}\b)/g, '').match(/\d[\d,\.]*\s*video/i);
+          if (m) { const n = parseInt(m[0].replace(/[^\d]/g, ''), 10); if (Number.isFinite(n) && n >= floor) return n; }
+        }
+      }
+      return null;
+    };
+
+    // POST /youtubei/v1/browse with an arbitrary body. Anonymous first (a
+    // logged-in session's own calls carry an Authorization: SAPISIDHASH header we
+    // can't reproduce), then credentialed as a fallback.
+    const statuses = [];
+    let credsOverride = null; // when set, use only this credentials mode
+    const browse = async (body) => {
+      for (const cred of (credsOverride ? [credsOverride] : ['omit', 'include'])) {
+        let resp;
+        try {
+          resp = await fetch(`/youtubei/v1/browse?key=${apiKey}&prettyPrint=false`, {
+            method: 'POST', credentials: cred,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context: baseContext, ...body })
+          });
+        } catch { statuses.push(`${cred}:ERR`); continue; }
+        statuses.push(`${cred}:${resp.status}`);
+        if (resp.ok) { try { return await resp.json(); } catch { return null; } }
+      }
+      return null;
+    };
+
+    // Read the declared total from the live page if it happens to be loaded.
+    let liveTotal = null, seededFromLive = false;
+    try {
+      const live = window.ytInitialData
+        || (window.ytcfg && window.ytcfg.data_ && window.ytcfg.data_.RAW_INITIAL_DATA);
+      if (live && (!listId || location.href.includes(listId))) {
+        liveTotal = parseTotal(live, 0);
+        seededFromLive = true;
+      }
+    } catch { /* ignore */ }
+
+    const pageAdds = [];
+    let guard = 0;
+    // Follow a continuation chain to its end, recording how many NEW videos each
+    // page contributes (so a premature stop is visible in the debug output).
+    const drain = async (firstData) => {
+      let data = firstData;
+      let token = data ? (tokensIn(data)[0] || null) : null;
+      if (data) { const b0 = out.length; collect(data); pageAdds.push(out.length - b0); }
+      let prev = null;
+      while (token && out.length < max && guard < 200) {
+        guard++;
+        const before = out.length;
+        data = await browse({ continuation: token });
+        if (!data) break;
+        collect(data);
+        pageAdds.push(out.length - before);
+        const next = tokensIn(data).find(t => t !== token && t !== prev) || null;
+        prev = token; token = next;
+      }
+    };
+
+    // Primary, canonical method: browse the playlist by id ("VL"+listId). This
+    // returns playlistVideoRenderer items 100-at-a-time with a clean continuation
+    // token that paginates to the true end — far more reliable than scraping
+    // whatever tokens happen to sit in the live page's ytInitialData.
+    // params 'wgYCCAA=' is yt-dlp's flag that makes the browse response INCLUDE
+    // videos the WEB client otherwise hides (region-blocked, age-gated, some
+    // "unavailable" entries) — the difference between the 154 the WEB grid shows
+    // and the full count the Data API reports.
+    const SHOW_UNAVAILABLE = 'wgYCCAA=';
+    let usedBrowseId = false;
+    if (listId) {
+      const first = await browse({ browseId: 'VL' + listId, params: SHOW_UNAVAILABLE });
+      if (first) { usedBrowseId = true; if (liveTotal == null) liveTotal = parseTotal(first, 0); await drain(first); }
+    }
+
+    // Fallback: only when browse-by-id itself failed (blocked / empty). When it
+    // succeeded it already yielded the complete unique list, so re-scanning the
+    // live page here would just re-count the same videos as duplicates.
+    if (!usedBrowseId || out.length === 0) {
+      try {
+        const live = window.ytInitialData
+          || (window.ytcfg && window.ytcfg.data_ && window.ytcfg.data_.RAW_INITIAL_DATA);
+        if (live && (!listId || location.href.includes(listId))) {
+          const b0 = out.length; collect(live); pageAdds.push(out.length - b0);
+          const tried = new Set();
+          const queue = tokensIn(live);
+          if (startToken) queue.unshift(startToken);
+          while (queue.length && out.length < max && guard < 200) {
+            const tok = queue.shift();
+            if (!tok || tried.has(tok)) continue;
+            tried.add(tok); guard++;
+            const before = out.length;
+            const data = await browse({ continuation: tok });
+            if (!data) continue;
+            collect(data);
+            pageAdds.push(out.length - before);
+            for (const t of tokensIn(data)) { if (!tried.has(t)) queue.push(t); }
+          }
+        }
+      } catch { /* keep whatever we have */ }
+    }
+
+    // Second pass with the logged-in session. The anonymous pass can't see
+    // videos that are age- or region-gated for signed-out users; the user's own
+    // cookies often can. Only worth it when we came up short with no error.
+    let pass2Added = 0;
+    const cleanSoFar = !statuses.some(s => !/:2\d\d$/.test(s));
+    if (listId && usedBrowseId && cleanSoFar && out.length < (liveTotal || 0)) {
+      const beforeP2 = out.length;
+      countDupes = false; // re-seeing the same videos here isn't a real duplicate
+      credsOverride = 'include';
+      try {
+        const first2 = await browse({ browseId: 'VL' + listId, params: SHOW_UNAVAILABLE });
+        if (first2) await drain(first2);
+      } catch { /* keep pass-1 results */ }
+      credsOverride = null;
+      pass2Added = out.length - beforeP2;
+    }
+
+    return { videos: out, total: liveTotal, dupes, dbg: { startTokenLen: (startToken || '').length, seededFromLive, usedBrowseId, liveTotal, dupes, pass2Added, pages: guard, pageAdds, skippedLockup, statuses, collected: out.length, usedPageCfg: !!pageKey, href: location.href } };
+  };
+
+  // The injected code seeds from the tab's own window.ytInitialData, so the tab
+  // must actually be showing THIS playlist. Reuse an already-open tab on this
+  // list if there is one; otherwise open a throwaway background tab on it. (A
+  // random open YouTube tab won't do — its ytInitialData is a different page.)
+  const openTabs = await chrome.tabs.query({ url: ['*://www.youtube.com/*'] });
+  let tab = openTabs.find(t => t.url && t.url.includes(`list=${listId}`) && t.status === 'complete');
+  let createdTabId = null;
+  try {
+    if (!tab) {
+      tab = await new Promise((resolve) => {
+        chrome.tabs.create({ url: `https://www.youtube.com/playlist?list=${listId}`, active: false }, (t) => resolve(t || null));
+      });
+      if (!tab) return { videos: [], total: null };
+      createdTabId = tab.id;
+      await new Promise((resolve) => {
+        const done = () => { chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); };
+        const onUpdated = (id, info) => { if (id === createdTabId && info.status === 'complete') done(); };
+        chrome.tabs.onUpdated.addListener(onUpdated);
+        setTimeout(done, 15000);
+      });
+    }
+    log(`Paging playlist continuations in tab ${tab.id} (created=${createdTabId !== null})`);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: injected,
+      args: [apiKey, clientVersion, startToken, max, listId]
+    });
+    const r = results?.[0]?.result;
+    log(`continuations dbg: ${JSON.stringify(r?.dbg)}`);
+    return { videos: r?.videos || [], total: r?.total ?? null, dupes: r?.dupes ?? 0 };
+  } catch (e) {
+    log(`tabBrowseContinuations error: ${e.message || e}`);
+    return { videos: [], total: null, dupes: 0 };
+  } finally {
+    if (createdTabId !== null) chrome.tabs.remove(createdTabId, () => { void chrome.runtime.lastError; });
+  }
+}

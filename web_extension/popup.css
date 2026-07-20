@@ -276,6 +276,22 @@ textarea {
   text-transform: uppercase;
   margin-bottom: 10px;
 }
+.queue-head { display: flex; align-items: center; justify-content: space-between; }
+.btn-clear-queue {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--empty-border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.btn-clear-queue:hover { color: #ef4444; border-color: #ef4444; }
+.btn-clear-queue:disabled { opacity: 0.4; cursor: default; }
+
 .add-row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
 .url-input { flex: 1; font-size: 12px; }
 
@@ -574,6 +590,49 @@ body.dark .chip.on {
   animation: fadeIn 0.2s ease;
 }
 .btn-msg.hidden { display: none; }
+
+/* Persistent import banner pinned at the top of the queue view */
+.import-banner {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: rgba(34,197,94,0.18);
+  border: 1px solid rgba(34,197,94,0.4);
+  color: #4ade80;
+}
+.import-banner.warn {
+  background: rgba(234,179,8,0.18);
+  border-color: rgba(234,179,8,0.4);
+  color: #fbbf24;
+}
+.import-banner.error {
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(239,68,68,0.4);
+  color: #f87171;
+}
+#import-banner-text { flex: 1; }
+.import-banner-close {
+  flex: none;
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 2px;
+}
+.import-banner-close:hover { opacity: 1; }
+.import-banner.hidden { display: none; }
 
 .btn-row { display: flex; gap: 8px; align-items: stretch; }
 .btn-row .btn-run { flex: 1; }

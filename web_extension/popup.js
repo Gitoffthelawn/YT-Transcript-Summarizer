@@ -1,5 +1,5 @@
 import { PROVIDERS, getPreset, isPreset } from './modules/config.js';
-import { showMsg } from './modules/ui-utils.js';
+import { showMsg, showBanner } from './modules/ui-utils.js';
 import { state } from './modules/popup-state.js';
 import { renderHistory, clearHistory } from './modules/popup-history.js';
 import { populateTTSVoices, sendTTS, ttsPlay, ttsPauseResume, ttsStop, updateTTSStatus } from './modules/popup-tts.js';
@@ -184,6 +184,8 @@ async function init() {
   });
   document.getElementById('btn-add').addEventListener('click', addUrl);
   document.getElementById('btn-add-tab').addEventListener('click', addCurrentTab);
+  document.getElementById('btn-clear-queue').addEventListener('click', clearQueue);
+  document.getElementById('import-banner-close').addEventListener('click', () => showBanner(''));
   document.getElementById('btn-bulk-toggle').addEventListener('click', () => toggleBulkAdd());
   document.getElementById('btn-bulk-add').addEventListener('click', bulkAddUrls);
   document.getElementById('btn-bulk-cancel').addEventListener('click', () => {
@@ -498,7 +500,7 @@ function playlistInfo(url) {
 // leaving plain video URLs untouched. Returns { items, playlistVideos, errors }.
 async function resolvePlaylists(tokens) {
   const items = [];
-  let playlistVideos = 0, errors = 0, truncated = false;
+  let playlistVideos = 0, playlistTotal = 0, playlistDupes = 0, errors = 0, truncated = false, blocked = false;
   for (const url of tokens) {
     const pl = playlistInfo(url);
     if (!pl) { items.push(url); continue; }
@@ -510,17 +512,43 @@ async function resolvePlaylists(tokens) {
     showMsg('⏳ Expanding playlist…', 'warn');
     try {
       const res = await chrome.runtime.sendMessage({ type: 'expandPlaylist', url });
+      console.log('[playlist expand]', url, res && { count: res.count, total: res.total, dupes: res.dupes, truncated: res.truncated, blocked: res.blocked, contDbg: res.contDbg });
       if (res?.error) { errors++; showMsg(`Playlist: ${res.error}`, 'error'); continue; }
       const vids = res?.videos || [];
+      const declared = res?.total ?? vids.length;
       items.push(...vids);
       playlistVideos += vids.length;
-      if (res?.truncated) truncated = true;
+      playlistTotal += declared;
+      playlistDupes += (res?.dupes || 0);
+      if (res?.truncated) {
+        truncated = true;
+        if (res?.blocked) blocked = true;
+        showMsg(`⏳ Playlist: loaded ${vids.length} of ${declared} videos…`, 'warn');
+      } else {
+        showMsg(`✅ Playlist: ${vids.length} videos detected`, 'ok');
+      }
     } catch (e) {
       errors++;
       showMsg(`Playlist expansion failed: ${e.message || e}`, 'error');
     }
   }
-  return { items, playlistVideos, errors, truncated };
+  return { items, playlistVideos, playlistTotal, playlistDupes, errors, truncated, blocked };
+}
+
+// Build the persistent top banner text for a playlist import.
+function playlistBanner(imported, total, dupes, truncated, blocked) {
+  if (!truncated || total <= imported) {
+    // Loaded everything. If the playlist lists more entries than unique videos,
+    // the extras are repeats we collapsed — explain the number, don't alarm.
+    if (dupes > 0 && total > imported) {
+      return { text: `✅ Imported ${imported} videos — the playlist's ${total} entries include ${dupes} duplicate${dupes === 1 ? '' : 's'}`, type: 'ok' };
+    }
+    return { text: `✅ Imported ${imported} videos from the playlist`, type: 'ok' };
+  }
+  if (blocked) {
+    return { text: `⚠️ Imported ${imported} of ${total} playlist videos — YouTube blocked the rest (reload and retry to get more)`, type: 'warn' };
+  }
+  return { text: `ℹ️ Imported ${imported} of ${total} playlist videos — the other ${total - imported} are private, deleted or unavailable`, type: 'warn' };
 }
 
 async function addUrl() {
@@ -531,11 +559,17 @@ async function addUrl() {
     return;
   }
   input.value = '';
-  const { items, playlistVideos } = await resolvePlaylists(tokens);
+  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked } = await resolvePlaylists(tokens);
   if (items.length === 0) return;
   const { added, requeued } = await enqueueUrls(items);
   if (playlistVideos) {
-    showMsg(`✅ ${added} added${requeued ? `, ${requeued} re-queued` : ''} (${playlistVideos} from playlist)`, 'ok');
+    const short = truncated && playlistTotal > playlistVideos;
+    const fromPlaylist = short
+      ? `${playlistVideos} of ${playlistTotal} from playlist`
+      : `${playlistVideos} from playlist`;
+    showMsg(`✅ ${added} added${requeued ? `, ${requeued} re-queued` : ''} (${fromPlaylist})`, 'ok');
+    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked);
+    showBanner(b.text, b.type);
   } else if (added + requeued === 0) {
     showMsg('Already in the queue.', 'warn');
   }
@@ -548,7 +582,7 @@ async function bulkAddUrls() {
     showMsg('No valid YouTube links found.', 'error');
     return;
   }
-  const { items, playlistVideos, truncated } = await resolvePlaylists(tokens);
+  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked } = await resolvePlaylists(tokens);
   if (items.length === 0) { showMsg('No videos found.', 'error'); return; }
   const { added, requeued } = await enqueueUrls(items);
   ta.value = '';
@@ -556,8 +590,17 @@ async function bulkAddUrls() {
   const parts = [];
   if (added) parts.push(`${added} added`);
   if (requeued) parts.push(`${requeued} re-queued`);
-  if (playlistVideos) parts.push(`${playlistVideos} from playlist${truncated ? `, capped at ${added}` : ''}`);
+  const short = truncated && playlistTotal > playlistVideos;
+  if (playlistVideos) {
+    parts.push(short
+      ? `${playlistVideos} of ${playlistTotal} from playlist`
+      : `${playlistVideos} from playlist`);
+  }
   showMsg(parts.length ? `✅ ${parts.join(', ')}` : 'All links already in the queue.', parts.length ? 'ok' : 'warn');
+  if (playlistVideos) {
+    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked);
+    showBanner(b.text, b.type);
+  }
 }
 
 function toggleBulkAdd(force) {
@@ -596,6 +639,17 @@ async function removeJob(id) {
   state.jobs = state.jobs.filter(j => j.id !== id);
   await chrome.storage.local.set({ jobs: state.jobs });
   renderJobs();
+}
+
+async function clearQueue() {
+  if (state.running || state.jobs.length === 0) return;
+  const n = state.jobs.length;
+  if (!confirm(`Remove all ${n} video${n === 1 ? '' : 's'} from the queue?`)) return;
+  state.jobs = [];
+  await chrome.storage.local.set({ jobs: state.jobs });
+  renderJobs();
+  showBanner('');
+  showMsg('Queue cleared.', 'ok');
 }
 
 // ── Batch ─────────────────────────────────────────────────────────────────────

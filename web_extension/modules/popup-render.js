@@ -160,6 +160,11 @@ export async function setJobLang(id, lang) {
 
 // ── Job Rendering ─────────────────────────────────────────────────────────────
 export function renderJobs() {
+  const clearBtn = document.getElementById('btn-clear-queue');
+  if (clearBtn) {
+    clearBtn.classList.toggle('hidden', state.jobs.length === 0);
+    clearBtn.disabled = state.running;
+  }
   const list = document.getElementById('job-list');
   if (state.jobs.length === 0) {
     list.innerHTML = '<div class="empty-state">Add a URL or open a YouTube video and click 📌<span class="empty-hint">Hover the mode tabs above for a description of each mode</span></div>';

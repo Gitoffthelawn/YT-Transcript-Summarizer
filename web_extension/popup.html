@@ -139,9 +139,18 @@
 
 <div id="main-view">
 
+<!-- Persistent import banner: how many videos were queued, stays until dismissed -->
+<div id="import-banner" class="import-banner hidden">
+  <span id="import-banner-text"></span>
+  <button id="import-banner-close" class="import-banner-close" title="Dismiss">×</button>
+</div>
+
 <!-- Video Queue -->
 <div class="section">
-  <div class="section-title">Video Queue</div>
+  <div class="section-title queue-head">
+    <span>Video Queue</span>
+    <button id="btn-clear-queue" class="btn-clear-queue hidden" title="Remove all videos from the queue">Clear all</button>
+  </div>
   <div class="add-row">
     <input type="text" id="url-input" placeholder="Video or playlist URL…" class="url-input" title="Paste a video URL, or a playlist URL to queue all its videos">
     <button id="btn-add" class="btn-sm accent">+</button>

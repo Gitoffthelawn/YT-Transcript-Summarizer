@@ -6,6 +6,21 @@ export function escHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// Persistent banner pinned at the top of the queue view. Unlike showMsg it does
+// not auto-hide — it stays until dismissed or replaced, so an import count (e.g.
+// "100 of 166 imported") remains visible while the user scrolls the queue.
+// Pass text === '' to hide it.
+export function showBanner(text, type = 'ok') {
+  const banner = document.getElementById('import-banner');
+  const label  = document.getElementById('import-banner-text');
+  if (!banner || !label) return;
+  if (!text) { banner.classList.add('hidden'); return; }
+  label.textContent = text;
+  banner.classList.remove('warn', 'error');
+  if (type === 'warn' || type === 'error') banner.classList.add(type);
+  banner.classList.remove('hidden');
+}
+
 export function showMsg(text, type = 'ok') {
   const btnMsg  = document.getElementById('btn-msg');
   const mainView = document.getElementById('main-view');
