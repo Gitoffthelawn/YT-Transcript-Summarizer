@@ -394,7 +394,15 @@ function connectPort() {
         chrome.storage.local.set({ running: false });
         setUIAsStopped();
         renderJobs();
-        showMsg('✅ Processing complete!', 'ok');
+        const s = msg.summary;
+        if (s && (s.noTranscript || s.failed)) {
+          const bits = [`${s.done} done`];
+          if (s.noTranscript) bits.push(`${s.noTranscript} without transcript`);
+          if (s.failed) bits.push(`${s.failed} failed`);
+          showMsg(`✅ Complete — ${bits.join(', ')}`, s.failed ? 'warn' : 'ok');
+        } else {
+          showMsg('✅ Processing complete!', 'ok');
+        }
       } else if (msg.type === 'tts-state') {
         updateTTSStatus(msg);
       }

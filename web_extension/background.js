@@ -150,7 +150,7 @@ async function runBatch(fromIndex = 0) {
 
     if (await batchCancelled()) { isRunning = false; return; }
 
-    const hasMore = jobs.slice(i + 1).some(j => j.status !== 'done' && j.status !== 'error');
+    const hasMore = jobs.slice(i + 1).some(j => j.status !== 'done' && j.status !== 'error' && j.status !== 'unavailable');
     if (!hasMore) break;
 
     if (mode === 'web') {
@@ -184,18 +184,25 @@ async function finalizeBatch() {
   isRunning = false;
   const { jobs = [] } = await chrome.storage.local.get('jobs');
   const doneCount = jobs.filter(j => j.status === 'done').length;
+  const noTxCount = jobs.filter(j => j.status === 'unavailable').length;
+  const failedCount = jobs.filter(j => j.status === 'error').length;
   await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
   chrome.alarms.clear('keepAlive');
   chrome.alarms.clear('nextJob');
-  safePost({ type: 'batchDone' });
+  safePost({ type: 'batchDone', summary: { done: doneCount, noTranscript: noTxCount, failed: failedCount } });
 
-  if (doneCount > 0) {
+  if (doneCount + noTxCount + failedCount > 0) {
+    // Break the outcome down so "12 without transcript" reads as expected rather
+    // than as silent failures — especially for long playlists.
+    const parts = [`${doneCount} completed`];
+    if (noTxCount) parts.push(`${noTxCount} without transcript`);
+    if (failedCount) parts.push(`${failedCount} failed`);
     try {
       chrome.notifications.create({
         type: 'basic',
         iconUrl: chrome.runtime.getURL('logo.png'),
         title: 'YT Summarizer',
-        message: `Processing completed for ${doneCount} video(s)!`
+        message: parts.join(', ')
       });
     } catch (_) {}
   }
@@ -247,13 +254,16 @@ async function processJob(job, settings) {
     }
 
     if (!result?.transcript) {
+      // Expected outcome for captionless / region- or age-restricted videos —
+      // not a bug to alarm about, and not worth dumping a debug file per video
+      // (a long playlist could trigger dozens). Flag it so the catch marks the
+      // job "unavailable" (a soft warning) rather than a hard error, and keep the
+      // diagnostics in the console for anyone who needs them.
       debugLog += '\n❌ ALL STRATEGIES FAILED\n';
-      await chrome.downloads.download({
-        url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(debugLog),
-        filename: `debug_${videoId}.txt`,
-        saveAs: false
-      });
-      throw new Error('No transcript found. Debug file downloaded.');
+      console.warn(`[YT Summarizer] No transcript for ${videoId} (${job.url})\n${debugLog}`);
+      const e = new Error('No transcript/captions available for this video.');
+      e.noTranscript = true;
+      throw e;
     }
 
     const { title, transcript } = result;
@@ -370,7 +380,11 @@ async function processJob(job, settings) {
 
   } catch (err) {
     const msg = err.message || String(err);
-    await updateJobStatus(job.id, 'error', `❌ ${msg.slice(0, 200)}`);
+    if (err.noTranscript) {
+      await updateJobStatus(job.id, 'unavailable', '⚠️ No transcript available for this video');
+    } else {
+      await updateJobStatus(job.id, 'error', `❌ ${msg.slice(0, 200)}`);
+    }
     console.warn(`[YT Summarizer] Error on ${job.url}:`, err);
   }
 }
@@ -389,7 +403,11 @@ async function fetchTranscriptForJob(job, settings) {
   if (!result) { try { result = await fetchViaAndroidPlayer(videoId, noop, transcriptLang); } catch (_) {} }
   if (!result) { try { result = await tabFetchTranscript(videoId, noop, transcriptLang); } catch (_) {} }
 
-  if (!result?.transcript) throw new Error('No transcript found.');
+  if (!result?.transcript) {
+    const e = new Error('No transcript/captions available for this video.');
+    e.noTranscript = true;
+    throw e;
+  }
   return { videoId, title: result.title, transcript: result.transcript };
 }
 
@@ -407,7 +425,11 @@ async function runBatchCombined(jobs, settings) {
       fetched.push({ job, ...result });
       await updateJobStatus(job.id, 'active', `📄 Transcript ready (${i + 1}/${pending.length})`);
     } catch (err) {
-      await updateJobStatus(job.id, 'error', `❌ ${err.message.slice(0, 200)}`);
+      if (err.noTranscript) {
+        await updateJobStatus(job.id, 'unavailable', '⚠️ No transcript available for this video');
+      } else {
+        await updateJobStatus(job.id, 'error', `❌ ${err.message.slice(0, 200)}`);
+      }
     }
     if (i < pending.length - 1) {
       if (await cancellableSleep(1500 + Math.random() * 2000)) return;

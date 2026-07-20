@@ -250,7 +250,7 @@ export function updateJob(id, status, statusText) {
 }
 
 export function updateProgress() {
-  const done  = state.jobs.filter(j => j.status === 'done' || j.status === 'error').length;
+  const done  = state.jobs.filter(j => j.status === 'done' || j.status === 'error' || j.status === 'unavailable').length;
   const total = state.jobs.length;
   const pct = total > 0 ? (done / total) * 100 : 0;
   document.getElementById('progress-fill').style.width = pct + '%';

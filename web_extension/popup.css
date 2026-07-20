@@ -339,6 +339,7 @@ textarea {
 }
 .job-item.status-done { border-color: rgba(34,197,94,0.3); }
 .job-item.status-error { border-color: rgba(239,68,68,0.3); }
+.job-item.status-unavailable { border-color: rgba(234,179,8,0.35); }
 .job-item.status-active { border-color: rgba(124,58,237,0.5); }
 
 .job-info { flex: 1; min-width: 0; }
@@ -368,6 +369,7 @@ textarea {
 .job-status.active { color: #a78bfa; animation: pulse 1.5s infinite; }
 .job-status.done { color: #22c55e; }
 .job-status.error { color: #f87171; }
+.job-status.unavailable { color: #eab308; }
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
