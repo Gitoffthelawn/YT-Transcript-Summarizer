@@ -6,6 +6,27 @@ import { sleep } from './modules/utils.js';
 
 let popupPort = null;
 let isRunning = false;
+// Set true when the user presses Stop/Reset. The batch loops poll this so an
+// in-progress run can actually be interrupted (not just the *next* scheduled job).
+let cancelRequested = false;
+
+// True if a stop was requested (same-worker flag) or the persisted running flag
+// was cleared (covers a service-worker restart mid-batch).
+async function batchCancelled() {
+  if (cancelRequested) return true;
+  const { running } = await chrome.storage.local.get('running');
+  return !running;
+}
+
+// A sleep that returns early with `true` as soon as a stop is requested.
+async function cancellableSleep(ms) {
+  const step = 250;
+  for (let waited = 0; waited < ms; waited += step) {
+    if (cancelRequested) return true;
+    await sleep(Math.min(step, ms - waited));
+  }
+  return cancelRequested;
+}
 
 // Resume batch if service worker was restarted mid-batch
 chrome.storage.local.get(['running', 'nextJobFromIndex', 'nextJobAt']).then(({ running, nextJobFromIndex, nextJobAt }) => {
@@ -69,6 +90,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener(async (msg) => {
     if (msg.type === 'startBatch') {
+      cancelRequested = false;
       chrome.alarms.clear('nextJob');
       await chrome.storage.local.set({
         jobs: msg.jobs, settings: msg.settings,
@@ -80,6 +102,7 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     }
     if (msg.type === 'resetState') {
+      cancelRequested = true;
       isRunning = false;
       chrome.alarms.clear('nextJob');
       await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
@@ -111,16 +134,21 @@ async function runBatch(fromIndex = 0) {
     const pending = jobs.filter(j => j.status === 'queued' || j.status === 'error');
     if (pending.length > 1) {
       await runBatchCombined(jobs, settings);
+      if (await batchCancelled()) { isRunning = false; return; }
       await finalizeBatch();
       return;
     }
   }
 
   for (let i = fromIndex; i < jobs.length; i++) {
+    if (await batchCancelled()) { isRunning = false; return; }
+
     const job = jobs[i];
     if (job.status === 'done') continue;
 
     await processJob(job, settings);
+
+    if (await batchCancelled()) { isRunning = false; return; }
 
     const hasMore = jobs.slice(i + 1).some(j => j.status !== 'done' && j.status !== 'error');
     if (!hasMore) break;
@@ -145,7 +173,7 @@ async function runBatch(fromIndex = 0) {
       return;
     } else {
       const ms = mode === 'api' ? 8000 + Math.random() * 7000 : 3000 + Math.random() * 4000;
-      await sleep(ms);
+      if (await cancellableSleep(ms)) { isRunning = false; return; }
     }
   }
 
@@ -303,6 +331,7 @@ async function processJob(job, settings) {
             const waitSec = baseWaitSec * Math.pow(2, attempt);
             debugLog += `\n⚠️ Rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${waitSec}s...\n`;
             for (let rem = waitSec; rem > 0; rem--) {
+              if (cancelRequested) throw new Error('Interrupted by user');
               await updateJobStatus(job.id, 'active', `⏳ API rate limit — retry in ${rem}s (${attempt + 1}/${maxRetries})...`);
               await sleep(1000);
             }
@@ -370,6 +399,7 @@ async function runBatchCombined(jobs, settings) {
 
   const fetched = [];
   for (let i = 0; i < pending.length; i++) {
+    if (await batchCancelled()) return;
     const job = pending[i];
     await updateJobStatus(job.id, 'active', `📥 Fetching transcript ${i + 1}/${pending.length}...`);
     try {
@@ -379,10 +409,12 @@ async function runBatchCombined(jobs, settings) {
     } catch (err) {
       await updateJobStatus(job.id, 'error', `❌ ${err.message.slice(0, 200)}`);
     }
-    if (i < pending.length - 1) await sleep(1500 + Math.random() * 2000);
+    if (i < pending.length - 1) {
+      if (await cancellableSleep(1500 + Math.random() * 2000)) return;
+    }
   }
 
-  if (fetched.length === 0) return;
+  if (fetched.length === 0 || await batchCancelled()) return;
 
   const combinedTranscript = fetched.map((r, i) =>
     `## Video ${i + 1}: ${r.title || r.videoId}\nSource: ${r.job.url}\n\n${r.transcript}`

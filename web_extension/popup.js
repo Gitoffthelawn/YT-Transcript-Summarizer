@@ -184,6 +184,15 @@ async function init() {
   });
   document.getElementById('btn-add').addEventListener('click', addUrl);
   document.getElementById('btn-add-tab').addEventListener('click', addCurrentTab);
+  document.getElementById('btn-bulk-toggle').addEventListener('click', () => toggleBulkAdd());
+  document.getElementById('btn-bulk-add').addEventListener('click', bulkAddUrls);
+  document.getElementById('btn-bulk-cancel').addEventListener('click', () => {
+    document.getElementById('bulk-input').value = '';
+    toggleBulkAdd(false);
+  });
+  document.getElementById('bulk-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); bulkAddUrls(); }
+  });
   document.getElementById('btn-run').addEventListener('click', startBatch);
   document.getElementById('btn-reset').addEventListener('click', resetBatch);
   document.getElementById('btn-prompt-toggle').addEventListener('click', togglePromptEditor);
@@ -407,43 +416,102 @@ async function toggleTheme() {
 }
 
 // ── Job Management ────────────────────────────────────────────────────────────
-async function addUrl() {
-  const input = document.getElementById('url-input');
-  const url = input.value.trim();
-  if (!url) return;
 
-  if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
-    showMsg('Please enter a valid YouTube URL.', 'error');
-    return;
+// Extract every YouTube URL from an arbitrary blob of text (one-per-line,
+// space-separated, comma-separated or a mix — numbered lists are fine too).
+function extractYouTubeUrls(text) {
+  const seen = new Set();
+  const urls = [];
+  for (let tok of String(text).split(/[\s,]+/)) {
+    tok = tok.trim().replace(/^[<("'\[]+|[>)"'\].]+$/g, '');
+    if (!tok) continue;
+    if (!tok.includes('youtube.com') && !tok.includes('youtu.be')) continue;
+    if (!/^https?:\/\//i.test(tok)) tok = 'https://' + tok;
+    if (seen.has(tok)) continue;
+    seen.add(tok);
+    urls.push(tok);
   }
+  return urls;
+}
 
-  const existing = state.jobs.find(j => j.url === url);
-  if (existing) {
-    if (existing.status === 'error' || existing.status === 'queued') {
-      existing.status = 'queued';
-      existing.statusText = 'Queued';
-      await chrome.storage.local.set({ jobs: state.jobs });
-    }
-    input.value = '';
-    renderJobs();
-    return;
-  }
-
-  const job = { id: Date.now(), url, title: null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
-  state.jobs.push(job);
-  await chrome.storage.local.set({ jobs: state.jobs });
-  input.value = '';
-  renderJobs();
+// Lazily fetch and fill in the video title for a freshly-added job.
+function loadTitle(jobId, url) {
   fetchVideoTitle(url).then(title => {
     if (!title) return;
-    const j = state.jobs.find(j => j.url === url);
+    const j = state.jobs.find(j => j.id === jobId);
     if (j && !j.title) {
       j.title = title;
       chrome.storage.local.set({ jobs: state.jobs });
-      const el = document.querySelector(`.job-title[data-job-id="${j.id}"]`);
+      const el = document.querySelector(`.job-title[data-job-id="${jobId}"]`);
       if (el) { el.textContent = title; el.classList.remove('loading'); }
     }
   });
+}
+
+// Add a list of URLs to the queue, de-duplicating against existing jobs and
+// re-queueing ones that previously errored. Returns a summary count.
+async function enqueueUrls(urls) {
+  let added = 0, requeued = 0;
+  const fresh = [];
+  urls.forEach((url, i) => {
+    const existing = state.jobs.find(j => j.url === url);
+    if (existing) {
+      if (existing.status === 'error') {
+        existing.status = 'queued';
+        existing.statusText = 'Queued';
+        requeued++;
+      }
+      return;
+    }
+    const job = { id: Date.now() + i, url, title: null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
+    state.jobs.push(job);
+    fresh.push(job);
+    added++;
+  });
+
+  if (added || requeued) {
+    await chrome.storage.local.set({ jobs: state.jobs });
+    renderJobs();
+  }
+  fresh.forEach(job => loadTitle(job.id, job.url));
+  return { added, requeued };
+}
+
+async function addUrl() {
+  const input = document.getElementById('url-input');
+  const urls = extractYouTubeUrls(input.value);
+  if (urls.length === 0) {
+    showMsg('Please enter a valid YouTube URL.', 'error');
+    return;
+  }
+  const { added, requeued } = await enqueueUrls(urls);
+  input.value = '';
+  if (added + requeued === 0) showMsg('Already in the queue.', 'warn');
+}
+
+async function bulkAddUrls() {
+  const ta = document.getElementById('bulk-input');
+  const urls = extractYouTubeUrls(ta.value);
+  if (urls.length === 0) {
+    showMsg('No valid YouTube links found.', 'error');
+    return;
+  }
+  const { added, requeued } = await enqueueUrls(urls);
+  ta.value = '';
+  toggleBulkAdd(false);
+  const parts = [];
+  if (added) parts.push(`${added} added`);
+  if (requeued) parts.push(`${requeued} re-queued`);
+  showMsg(parts.length ? `✅ ${parts.join(', ')}` : 'All links already in the queue.', parts.length ? 'ok' : 'warn');
+}
+
+function toggleBulkAdd(force) {
+  const panel = document.getElementById('bulk-add');
+  const btn = document.getElementById('btn-bulk-toggle');
+  const show = force ?? panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !show);
+  btn.classList.toggle('active', show);
+  if (show) document.getElementById('bulk-input').focus();
 }
 
 async function addCurrentTab() {

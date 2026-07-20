@@ -73,13 +73,8 @@
   </div>
   <div class="field">
     <label>🤖 Model <span class="label-note">— API mode only</span></label>
-    <select id="model-select">
-      <option value="claude-sonnet-4-6">claude-sonnet-4-6 (Recommended)</option>
-      <option value="claude-opus-4-7">claude-opus-4-7 (Most capable)</option>
-      <option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet</option>
-      <option value="claude-3-5-sonnet-latest">claude-3-5-sonnet</option>
-    </select>
-    <input type="text" id="custom-model-input" placeholder="e.g. llama3, phi3, mistral" autocomplete="off" class="hidden" style="margin-top:6px">
+    <input type="text" id="model-input" list="model-list" placeholder="Select or type a model name…" autocomplete="off">
+    <datalist id="model-list"></datalist>
   </div>
   <div class="field">
     <label id="api-key-label">🔑 API Key <span class="label-note">— required for API mode</span></label>
@@ -151,6 +146,14 @@
     <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=..." class="url-input">
     <button id="btn-add" class="btn-sm accent">+</button>
     <button id="btn-add-tab" class="btn-sm" title="Add current YouTube tab">📌</button>
+    <button id="btn-bulk-toggle" class="btn-sm" title="Add a list of links at once">📋</button>
+  </div>
+  <div id="bulk-add" class="bulk-add hidden">
+    <textarea id="bulk-input" rows="4" placeholder="Paste a list of YouTube links — one per line (spaces or commas also work)…"></textarea>
+    <div class="bulk-actions">
+      <button id="btn-bulk-add" class="btn-sm accent">＋ Add all to queue</button>
+      <button id="btn-bulk-cancel" class="btn-sm">Cancel</button>
+    </div>
   </div>
   <div id="job-list" class="job-list">
     <div class="empty-state">Add a URL or open a YouTube video and click 📌</div>

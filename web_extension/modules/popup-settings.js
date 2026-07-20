@@ -22,23 +22,16 @@ export async function applyProvider(provider, apiKeys = {}, models = {}, customE
     document.getElementById('custom-endpoint').value = customEndpointUrl;
   }
 
-  const modelSel = document.getElementById('model-select');
-  const modelInput = document.getElementById('custom-model-input');
-  if (provider === 'custom') {
-    modelSel.classList.add('hidden');
-    modelInput.classList.remove('hidden');
-    modelInput.value = models[provider] || '';
-  } else {
-    modelSel.classList.remove('hidden');
-    modelInput.classList.add('hidden');
-    modelSel.innerHTML = info.models.map(m =>
-      `<option value="${escHtml(m.value)}">${escHtml(m.label)}</option>`
-    ).join('');
-    const stored = models[provider] || info.defaultModel;
-    if ([...modelSel.options].some(o => o.value === stored)) {
-      modelSel.value = stored;
-    }
-  }
+  // Editable combobox: known models are suggestions, but any name can be typed.
+  const modelInput = document.getElementById('model-input');
+  const modelList  = document.getElementById('model-list');
+  modelList.innerHTML = info.models.map(m =>
+    `<option value="${escHtml(m.value)}" label="${escHtml(m.label)}"></option>`
+  ).join('');
+  modelInput.value = models[provider] || info.defaultModel || '';
+  modelInput.placeholder = provider === 'custom'
+    ? 'e.g. llama3, phi3, mistral'
+    : info.models.length ? 'Select or type a model name…' : 'Type a model name…';
 
   document.querySelectorAll('.mode-tab').forEach(tab => {
     if (tab.dataset.mode === 'web') {
@@ -56,9 +49,7 @@ export async function applyProvider(provider, apiKeys = {}, models = {}, customE
 export async function persistSettings() {
   const provider = document.getElementById('provider-select').value;
   const isCustom = provider === 'custom';
-  const model = isCustom
-    ? document.getElementById('custom-model-input').value.trim()
-    : document.getElementById('model-select').value;
+  const model = document.getElementById('model-input').value.trim();
   const apiKey            = document.getElementById('api-key').value.trim();
   const customEndpointUrl = isCustom ? document.getElementById('custom-endpoint').value.trim() : '';
   const transcriptLang    = document.getElementById('transcript-lang-select').value;

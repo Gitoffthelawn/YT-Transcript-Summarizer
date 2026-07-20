@@ -9,6 +9,7 @@ A browser extension (Chrome/Firefox) that extracts transcripts from YouTube vide
 - **5 AI providers** — Anthropic Claude, OpenAI, Google Gemini, OpenRouter, and custom/local endpoints
 - **3 operating modes** — Web (paste into the AI chat UI), Transcript Only (download raw text), API (call the AI directly)
 - **Batch queue** — add multiple YouTube URLs and process them all at once
+- **Bulk add** — paste a whole list of links (one per line, or space/comma-separated) and queue them in one click
 - **Per-video settings** — override format and summary length for each video individually
 - **Summary length** — Short, Normal, or Long presets, each with English and Italian prompts
 - **Output format** — Markdown (`.md`) or plain Chat format
@@ -121,9 +122,15 @@ Install directly from the [Firefox Add-ons page](https://addons.mozilla.org/it/f
 2. Select your **provider** from the tab bar
 3. Select your **mode** (Web / Transcript / API)
 4. Choose **format** and **length** from the chips row
-5. Add YouTube URLs manually or click **📌** while on a YouTube tab
+5. Add YouTube URLs manually, click **📌** while on a YouTube tab, or click **📋** to paste a whole list of links at once
 6. *(Optional)* Click **✎** on individual jobs to override their settings
 7. Click **▶ START PROCESSING**
+
+To interrupt a running batch, click the **⏹** button. This stops the queue immediately — no further videos are started. The single video currently being fetched finishes its in-flight network request, and any video left mid-processing is marked *Interrupted*.
+
+### Bulk add
+
+Click the **📋** button next to the URL field to open the bulk-add box. Paste any list of YouTube links — one per line, or separated by spaces or commas (numbered lists work too). Click **Add all to queue** (or press **Ctrl/Cmd + Enter**). Duplicates are skipped and previously failed videos are re-queued; you'll get a summary such as *"5 added, 2 re-queued"*.
 
 ### API mode setup
 
@@ -179,6 +186,8 @@ If all three strategies fail, a `debug_<videoId>.txt` file is downloaded with fu
 **OpenRouter** — any model available on openrouter.ai (defaults provided as a starting point)
 
 **Custom** — any OpenAI-compatible model; type the model name manually
+
+> **Model field & keeping it current.** For every provider the model field is an editable combobox: the known models appear as dropdown suggestions, but you can always **type any model name** — so a new release is never blocked by a stale list. The suggestions live in one place, [`modules/config.js`](modules/config.js) (`PROVIDERS` → each provider's `models` array, plus `defaultModel`). Updating them is now optional cosmetic maintenance, not a requirement: if a suggestion is outdated, just type the current model name.
 
 ---
 
