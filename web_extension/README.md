@@ -164,7 +164,7 @@ Select **Custom** as the provider, enter your endpoint URL (e.g. `http://localho
 The extension tries three strategies in order, falling back to the next if one fails:
 
 1. **Watch page + `get_transcript` endpoint** — downloads the watch page (with browser cookies) to extract fresh caption URLs, then falls back to the InnerTube `get_transcript` API
-2. **InnerTube Android Player API** — calls the Android client endpoint directly (works when YouTube allows unauthenticated requests)
+2. **InnerTube Player API** — calls the internal player endpoint directly, trying the Android then iOS clients (two independent attestation paths that still return caption tracks without a PO token)
 3. **Real tab fallback** — opens the video in a background tab and reads the transcript from the page (reuses an existing tab if the video is already open)
 
 If all three strategies fail, a `debug_<videoId>.txt` file is downloaded with full diagnostic output.

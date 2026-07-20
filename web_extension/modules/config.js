@@ -10,6 +10,11 @@ export const CONFIG = {
     // Known working client versions
     androidClientVersion: '20.10.38',
     androidSdkVersion: 34,
+    // IOS is a second, independent attestation path (iOSGuard vs DroidGuard):
+    // when YouTube tightens PO-token enforcement on ANDROID, IOS often still
+    // returns caption tracks. Verified working without a PO token.
+    iosClientVersion: '20.10.4',
+    iosDeviceModel: 'iPhone16,2',
     webClientVersion: '2.20240530.02.00'
   },
 

@@ -9,7 +9,8 @@ import { fetchWithTimeout, findInObject, sleep } from './utils.js';
 // it does for a cookie-less request — verified by testing both side by side.
 export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en') {
   const clients = [
-    { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 }
+    { clientName: 'ANDROID', clientVersion: CONFIG.youtube.androidClientVersion, androidSdkVersion: CONFIG.youtube.androidSdkVersion, hl: 'en', gl: 'US', utcOffsetMinutes: 0 },
+    { clientName: 'IOS', clientVersion: CONFIG.youtube.iosClientVersion, deviceMake: 'Apple', deviceModel: CONFIG.youtube.iosDeviceModel, hl: 'en', gl: 'US', utcOffsetMinutes: 0 }
   ];
 
   for (const clientInfo of clients) {
