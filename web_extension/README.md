@@ -10,6 +10,7 @@ A browser extension (Chrome/Firefox) that extracts transcripts from YouTube vide
 - **3 operating modes** — Web (paste into the AI chat UI), Transcript Only (download raw text), API (call the AI directly)
 - **Batch queue** — add multiple YouTube URLs and process them all at once
 - **Bulk add** — paste a whole list of links (one per line, or space/comma-separated) and queue them in one click
+- **Playlist expansion** — paste a playlist URL and every video in it is fetched and queued automatically
 - **Per-video settings** — override format and summary length for each video individually
 - **Summary length** — Short, Normal, or Long presets, each with English and Italian prompts
 - **Output format** — Markdown (`.md`) or plain Chat format
@@ -122,7 +123,7 @@ Install directly from the [Firefox Add-ons page](https://addons.mozilla.org/it/f
 2. Select your **provider** from the tab bar
 3. Select your **mode** (Web / Transcript / API)
 4. Choose **format** and **length** from the chips row
-5. Add YouTube URLs manually, click **📌** while on a YouTube tab, or click **📋** to paste a whole list of links at once
+5. Add YouTube URLs manually, click **📌** while on a YouTube tab, click **📋** to paste a whole list of links at once, or paste a **playlist URL** to queue all its videos
 6. *(Optional)* Click **✎** on individual jobs to override their settings
 7. Click **▶ START PROCESSING**
 
@@ -131,6 +132,12 @@ To interrupt a running batch, click the **⏹** button. This stops the queue imm
 ### Bulk add
 
 Click the **📋** button next to the URL field to open the bulk-add box. Paste any list of YouTube links — one per line, or separated by spaces or commas (numbered lists work too). Click **Add all to queue** (or press **Ctrl/Cmd + Enter**). Duplicates are skipped and previously failed videos are re-queued; you'll get a summary such as *"5 added, 2 re-queued"*.
+
+### Playlist expansion
+
+Paste a **playlist URL** (e.g. `https://www.youtube.com/playlist?list=…`) into either the URL field or the bulk box, and every video in the playlist is fetched and added to the queue automatically — titles included. It works for playlists of any size (paged 100 at a time, capped at 500 videos to keep the queue manageable). A `watch?v=…&list=…` link is treated as the single chosen video, not the whole playlist; auto-generated Mix/Radio playlists (`list=RD…`) can't be expanded.
+
+Under the hood this uses YouTube's internal `browse` API (the same one the site itself uses), with a self-healing fallback that refreshes the API key from the live playlist page if the shipped one ever rotates.
 
 ### API mode setup
 

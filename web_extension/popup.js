@@ -448,12 +448,15 @@ function loadTitle(jobId, url) {
   });
 }
 
-// Add a list of URLs to the queue, de-duplicating against existing jobs and
-// re-queueing ones that previously errored. Returns a summary count.
-async function enqueueUrls(urls) {
+// Add a list of items to the queue, de-duplicating against existing jobs and
+// re-queueing ones that previously errored. Each item is a URL string or a
+// { url, title } object (title known up-front skips the oembed lookup).
+async function enqueueUrls(items) {
   let added = 0, requeued = 0;
   const fresh = [];
-  urls.forEach((url, i) => {
+  items.forEach((item, i) => {
+    const url = typeof item === 'string' ? item : item.url;
+    const title = typeof item === 'string' ? null : (item.title || null);
     const existing = state.jobs.find(j => j.url === url);
     if (existing) {
       if (existing.status === 'error') {
@@ -463,7 +466,7 @@ async function enqueueUrls(urls) {
       }
       return;
     }
-    const job = { id: Date.now() + i, url, title: null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
+    const job = { id: Date.now() + i, url, title, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
     state.jobs.push(job);
     fresh.push(job);
     added++;
@@ -473,35 +476,87 @@ async function enqueueUrls(urls) {
     await chrome.storage.local.set({ jobs: state.jobs });
     renderJobs();
   }
-  fresh.forEach(job => loadTitle(job.id, job.url));
+  fresh.forEach(job => { if (!job.title) loadTitle(job.id, job.url); });
   return { added, requeued };
+}
+
+// Classify a URL as a playlist worth expanding. A specific video *within* a
+// playlist (watch?v=…&list=…) is treated as a single video, not the whole list.
+function playlistInfo(url) {
+  try {
+    const u = new URL(url);
+    const list = u.searchParams.get('list');
+    const isPlaylistPath = u.pathname === '/playlist';
+    if (!list && !isPlaylistPath) return null;
+    if (u.searchParams.get('v')) return null; // a chosen video inside a playlist
+    if (!list) return null;
+    return { id: list, expandable: !/^RD/.test(list) };
+  } catch { return null; }
+}
+
+// Expand any playlist links among the tokens into individual video items,
+// leaving plain video URLs untouched. Returns { items, playlistVideos, errors }.
+async function resolvePlaylists(tokens) {
+  const items = [];
+  let playlistVideos = 0, errors = 0, truncated = false;
+  for (const url of tokens) {
+    const pl = playlistInfo(url);
+    if (!pl) { items.push(url); continue; }
+    if (!pl.expandable) {
+      errors++;
+      showMsg('Mix/radio playlists cannot be expanded — skipped.', 'warn');
+      continue;
+    }
+    showMsg('⏳ Expanding playlist…', 'warn');
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'expandPlaylist', url });
+      if (res?.error) { errors++; showMsg(`Playlist: ${res.error}`, 'error'); continue; }
+      const vids = res?.videos || [];
+      items.push(...vids);
+      playlistVideos += vids.length;
+      if (res?.truncated) truncated = true;
+    } catch (e) {
+      errors++;
+      showMsg(`Playlist expansion failed: ${e.message || e}`, 'error');
+    }
+  }
+  return { items, playlistVideos, errors, truncated };
 }
 
 async function addUrl() {
   const input = document.getElementById('url-input');
-  const urls = extractYouTubeUrls(input.value);
-  if (urls.length === 0) {
+  const tokens = extractYouTubeUrls(input.value);
+  if (tokens.length === 0) {
     showMsg('Please enter a valid YouTube URL.', 'error');
     return;
   }
-  const { added, requeued } = await enqueueUrls(urls);
   input.value = '';
-  if (added + requeued === 0) showMsg('Already in the queue.', 'warn');
+  const { items, playlistVideos } = await resolvePlaylists(tokens);
+  if (items.length === 0) return;
+  const { added, requeued } = await enqueueUrls(items);
+  if (playlistVideos) {
+    showMsg(`✅ ${added} added${requeued ? `, ${requeued} re-queued` : ''} (${playlistVideos} from playlist)`, 'ok');
+  } else if (added + requeued === 0) {
+    showMsg('Already in the queue.', 'warn');
+  }
 }
 
 async function bulkAddUrls() {
   const ta = document.getElementById('bulk-input');
-  const urls = extractYouTubeUrls(ta.value);
-  if (urls.length === 0) {
+  const tokens = extractYouTubeUrls(ta.value);
+  if (tokens.length === 0) {
     showMsg('No valid YouTube links found.', 'error');
     return;
   }
-  const { added, requeued } = await enqueueUrls(urls);
+  const { items, playlistVideos, truncated } = await resolvePlaylists(tokens);
+  if (items.length === 0) { showMsg('No videos found.', 'error'); return; }
+  const { added, requeued } = await enqueueUrls(items);
   ta.value = '';
   toggleBulkAdd(false);
   const parts = [];
   if (added) parts.push(`${added} added`);
   if (requeued) parts.push(`${requeued} re-queued`);
+  if (playlistVideos) parts.push(`${playlistVideos} from playlist${truncated ? `, capped at ${added}` : ''}`);
   showMsg(parts.length ? `✅ ${parts.join(', ')}` : 'All links already in the queue.', parts.length ? 'ok' : 'warn');
 }
 

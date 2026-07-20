@@ -515,3 +515,165 @@ async function addToHistory(url, title) {
   }
   await chrome.storage.local.set({ videoHistory });
 }
+
+// ── Playlist expansion ────────────────────────────────────────────────────────
+// Turn a playlist URL into the list of its video URLs by scraping the playlist
+// page's embedded ytInitialData, then following browse continuations for the
+// (100-at-a-time) rest. Capped to keep huge playlists from flooding the queue.
+const PLAYLIST_MAX = 500;
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'expandPlaylist') {
+    expandPlaylist(msg.url)
+      .then(sendResponse)
+      .catch(e => sendResponse({ error: e.message || String(e) }));
+    return true; // keep the message channel open for the async response
+  }
+});
+
+// Depth-unbounded search for the first value stored under `key`.
+function deepFind(node, key, depth = 30) {
+  if (!node || typeof node !== 'object' || depth < 0) return null;
+  if (node[key] !== undefined) return node[key];
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') {
+      const r = deepFind(v, key, depth - 1);
+      if (r != null) return r;
+    }
+  }
+  return null;
+}
+
+// Walk the whole tree collecting every playlist video (id + title). YouTube
+// migrated the playlist layout to `lockupViewModel`; the legacy
+// `playlistVideoRenderer` is still handled for older responses/clients.
+function collectPlaylistVideos(node, out, seen) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const n of node) collectPlaylistVideos(n, out, seen);
+    return;
+  }
+  const lv = node.lockupViewModel;
+  if (lv?.contentId && lv.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' && !seen.has(lv.contentId)) {
+    seen.add(lv.contentId);
+    out.push({ videoId: lv.contentId, title: lv.metadata?.lockupMetadataViewModel?.title?.content || null });
+  }
+  const r = node.playlistVideoRenderer;
+  if (r?.videoId && !seen.has(r.videoId)) {
+    seen.add(r.videoId);
+    out.push({ videoId: r.videoId, title: r.title?.runs?.map(x => x.text).join('') || r.title?.simpleText || null });
+  }
+  for (const k in node) {
+    if (k === 'lockupViewModel' || k === 'playlistVideoRenderer') continue;
+    collectPlaylistVideos(node[k], out, seen);
+  }
+}
+
+function extractYtInitialData(html) {
+  const idx = html.indexOf('ytInitialData');
+  if (idx === -1) return null;
+  const start = html.indexOf('{', idx);
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) {
+      try { return JSON.parse(html.slice(start, i + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+function findContinuationToken(root) {
+  const cir = deepFind(root, 'continuationItemRenderer');
+  return cir ? deepFind(cir, 'token') : null;
+}
+
+// Page through a playlist via the InnerTube browse API (cleaner and much
+// lighter than downloading the full HTML page). Returns [{ videoId, title }].
+async function browsePlaylist(listId, apiKey, clientVersion) {
+  const seen = new Set();
+  const videos = [];
+  const call = (body) => fetchWithTimeout(
+    `https://www.youtube.com/youtubei/v1/browse?key=${apiKey}&prettyPrint=false`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: { client: { clientName: 'WEB', clientVersion, hl: 'en', gl: 'US' } },
+        ...body
+      })
+    },
+    15000
+  );
+
+  let resp = await call({ browseId: 'VL' + listId });
+  if (!resp.ok) throw new Error(`browse HTTP ${resp.status}`);
+  let data = await resp.json();
+  collectPlaylistVideos(data, videos, seen);
+
+  let token = findContinuationToken(data);
+  let guard = 0;
+  while (token && videos.length < PLAYLIST_MAX && guard < 60) {
+    guard++;
+    const before = videos.length;
+    resp = await call({ continuation: token });
+    if (!resp.ok) break;
+    data = await resp.json();
+    collectPlaylistVideos(data, videos, seen);
+    if (videos.length === before) break; // no progress — stop
+    token = findContinuationToken(data);
+  }
+  return videos;
+}
+
+async function expandPlaylist(url) {
+  let listId;
+  try { listId = new URL(url).searchParams.get('list'); } catch { listId = null; }
+  if (!listId) throw new Error('No playlist id in URL');
+  if (/^RD/.test(listId)) throw new Error('Mix/radio playlists are auto-generated and cannot be expanded');
+
+  // Fast path: browse API with the shipped InnerTube key.
+  let videos = [];
+  try {
+    videos = await browsePlaylist(listId, CONFIG.youtube.apiKey, CONFIG.youtube.webClientVersion);
+  } catch { videos = []; }
+
+  // Fallback: if the shipped key/version has rotated, refresh both from the
+  // live playlist page and retry; as a last resort parse the page directly.
+  if (videos.length === 0) {
+    try {
+      const pageResp = await fetchWithTimeout(
+        `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
+        { credentials: 'include', headers: { 'Accept-Language': 'en-US,en;q=0.9' } },
+        15000
+      );
+      if (pageResp.ok) {
+        const html = await pageResp.text();
+        let apiKey = CONFIG.youtube.apiKey, clientVersion = CONFIG.youtube.webClientVersion;
+        const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/); if (km) apiKey = km[1];
+        const vm = html.match(/"INNERTUBE_CLIENT_VERSION":\s*"([^"]+)"/); if (vm) clientVersion = vm[1];
+        try { videos = await browsePlaylist(listId, apiKey, clientVersion); } catch { videos = []; }
+        if (videos.length === 0) {
+          const data = extractYtInitialData(html);
+          if (data) { const seen = new Set(); collectPlaylistVideos(data, videos, seen); }
+        }
+      }
+    } catch { /* ignore — handled by the empty check below */ }
+  }
+
+  if (videos.length === 0) throw new Error('No videos found (private, empty, or unavailable playlist)');
+
+  const truncated = videos.length > PLAYLIST_MAX;
+  const out = videos.slice(0, PLAYLIST_MAX).map(v => ({
+    url: `https://www.youtube.com/watch?v=${v.videoId}`,
+    title: v.title
+  }));
+  return { videos: out, count: out.length, truncated };
+}

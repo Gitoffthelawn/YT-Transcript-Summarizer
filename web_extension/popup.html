@@ -143,13 +143,13 @@
 <div class="section">
   <div class="section-title">Video Queue</div>
   <div class="add-row">
-    <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=..." class="url-input">
+    <input type="text" id="url-input" placeholder="Video or playlist URL…" class="url-input" title="Paste a video URL, or a playlist URL to queue all its videos">
     <button id="btn-add" class="btn-sm accent">+</button>
     <button id="btn-add-tab" class="btn-sm" title="Add current YouTube tab">📌</button>
     <button id="btn-bulk-toggle" class="btn-sm" title="Add a list of links at once">📋</button>
   </div>
   <div id="bulk-add" class="bulk-add hidden">
-    <textarea id="bulk-input" rows="4" placeholder="Paste a list of YouTube links — one per line (spaces or commas also work)…"></textarea>
+    <textarea id="bulk-input" rows="4" placeholder="Paste YouTube links — one per line (spaces or commas also work). Playlist links are expanded into all their videos."></textarea>
     <div class="bulk-actions">
       <button id="btn-bulk-add" class="btn-sm accent">＋ Add all to queue</button>
       <button id="btn-bulk-cancel" class="btn-sm">Cancel</button>
