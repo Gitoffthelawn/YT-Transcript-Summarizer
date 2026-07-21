@@ -1,5 +1,74 @@
 import { CONFIG } from './config.js';
 import { fetchWithTimeout, findInObject, sleep } from './utils.js';
+import { parseTranscript, isComplete, coverageLabel, looksTruncated } from './transcript-parse.js';
+
+// Formats are tried in this order; the first one that parses AND covers the
+// whole video wins. If none is complete we keep the longest partial result
+// rather than returning nothing, and the caller reports the coverage.
+const CAPTION_FORMATS = ['&fmt=json3', '', '&fmt=srv3'];
+
+/**
+ * Choose a caption track. The old `find(t => t.languageCode.startsWith(lang))`
+ * returned whatever came first, which is frequently the auto-generated (ASR)
+ * track even when a human-written one exists in the same language.
+ */
+export function pickTrack(tracks, lang) {
+  if (!Array.isArray(tracks) || !tracks.length) return null;
+  const scored = tracks.map((t, i) => {
+    const code = String(t.languageCode || '');
+    let s = 0;
+    if (lang && lang !== 'auto') {
+      if (code === lang) s += 100;
+      else if (code.split('-')[0] === lang) s += 80;
+      else if (code.split('-')[0] === 'en') s += 20;
+    }
+    if (t.kind !== 'asr') s += 10; // prefer a manual track over ASR
+    return { t, i, s };
+  });
+  scored.sort((a, b) => (b.s - a.s) || (a.i - b.i));
+  return scored[0].t?.baseUrl ? scored[0].t : (tracks.find(t => t.baseUrl) || null);
+}
+
+/**
+ * Download one caption track, trying each format, and validate that the cues
+ * span the whole video. Returns { text, coverage, complete, format } or null.
+ */
+export async function fetchCaptionTrack(track, lengthSeconds, doFetch, log = () => {}) {
+  const base = String(track.baseUrl)
+    .replace(/([&?])fmt=[^&]*/g, '$1')
+    .replace(/\?&/, '?')
+    .replace(/[&?]$/, '');
+  let best = null;
+
+  for (const suffix of CAPTION_FORMATS) {
+    let body;
+    try {
+      body = await doFetch(base + suffix);
+    } catch (e) {
+      log(`fmt "${suffix || 'default'}": fetch error: ${e.message}`);
+      continue;
+    }
+    if (!body || body.length < 10) {
+      log(`fmt "${suffix || 'default'}": empty body — expired URL or PO-token enforcement`);
+      continue;
+    }
+    const parsed = parseTranscript(body);
+    if (!parsed) { log(`fmt "${suffix || 'default'}": unparseable (${body.length} bytes)`); continue; }
+
+    const complete = isComplete(parsed, lengthSeconds);
+    const cov = coverageLabel(parsed, lengthSeconds);
+    log(`fmt "${suffix || 'default'}": ${parsed.cues} cues, ${parsed.text.length} chars, coverage ${cov}`);
+
+    const candidate = { text: parsed.text, coverage: cov, complete, format: suffix || 'default', cues: parsed.cues };
+    if (complete) return candidate;
+    // Incomplete: remember the longest one and try the next format — a partial
+    // body in one format is often complete in another.
+    if (!best || candidate.text.length > best.text.length) best = candidate;
+  }
+
+  if (best) log(`No complete format; keeping the longest partial one (coverage ${best.coverage})`);
+  return best;
+}
 
 // Requests below rely on rules.json rewriting the Origin/Referer headers to
 // look like they came from youtube.com — Chrome's real "chrome-extension://"
@@ -31,8 +100,9 @@ export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en')
 
       const data = await resp.json();
       const title = data?.videoDetails?.title || videoId;
+      const lengthSeconds = Number(data?.videoDetails?.lengthSeconds) || null;
       const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-      log(`${clientInfo.clientName}: title="${title}", tracks=${tracks.length}`);
+      log(`${clientInfo.clientName}: title="${title}", duration=${lengthSeconds ?? '?'}s, tracks=${tracks.length}`);
 
       if (!tracks.length) {
         const reason = data?.playabilityStatus?.reason || 'unknown';
@@ -40,29 +110,22 @@ export async function fetchViaAndroidPlayer(videoId, log, transcriptLang = 'en')
         continue;
       }
 
-      const track = transcriptLang === 'auto'
-        ? tracks[0]
-        : (tracks.find(t => t.languageCode?.startsWith(transcriptLang)) ||
-           tracks.find(t => t.languageCode?.startsWith('en')) ||
-           tracks[0]);
-
+      const track = pickTrack(tracks, transcriptLang);
       if (!track?.baseUrl) { log(`${clientInfo.clientName}: Track has no baseUrl`); continue; }
       log(`${clientInfo.clientName}: Track lang="${track.languageCode}", kind="${track.kind || 'standard'}"`);
 
-      const baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
-      for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
-        try {
-          const tResp = await fetchWithTimeout(baseUrl + suffix, {}, 12000);
-          if (!tResp.ok) continue;
-          const text = await tResp.text();
-          log(`${clientInfo.clientName}: Body length: ${text.length}`);
-          if (text.length < 10) { log('Empty body — PO token issue or expired URL'); continue; }
-          const parsed = parseTranscriptText(text);
-          if (parsed) {
-            log(`${clientInfo.clientName}: ✅ Parsed (${parsed.length} chars)`);
-            return { title, transcript: parsed };
-          }
-        } catch (e) { log(`Fetch error: ${e.message}`); }
+      const got = await fetchCaptionTrack(track, lengthSeconds, async (url) => {
+        const tResp = await fetchWithTimeout(url, {}, 12000);
+        return tResp.ok ? await tResp.text() : null;
+      }, (m) => log(`${clientInfo.clientName}: ${m}`));
+
+      if (got) {
+        log(`${clientInfo.clientName}: ✅ Parsed (${got.text.length} chars, coverage ${got.coverage})`);
+        return {
+          title, transcript: got.text, lengthSeconds,
+          lang: track.languageCode || null, kind: track.kind || 'standard',
+          coverage: got.coverage, complete: got.complete
+        };
       }
     } catch (e) { log(`${clientInfo.clientName}: Exception: ${e.message}`); }
   }
@@ -78,6 +141,7 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
   let apiKey = CONFIG.youtube.apiKey;
   let clientVersion = CONFIG.youtube.webClientVersion;
   let playerData = null;
+  let lengthSeconds = null;
 
   try {
     const pageResp = await fetchWithTimeout(
@@ -92,7 +156,8 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
       playerData = extractYtInitialPlayerResponse(html);
       if (playerData) {
         title = playerData?.videoDetails?.title || videoId;
-        log(`Title: "${title}"`);
+        lengthSeconds = Number(playerData?.videoDetails?.lengthSeconds) || null;
+        log(`Title: "${title}", duration=${lengthSeconds ?? '?'}s`);
       }
       const km = html.match(/"INNERTUBE_API_KEY":\s*"([^"]+)"/);
       if (km) apiKey = km[1];
@@ -107,27 +172,22 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
     log(`Page extraction: ${tracks.length} caption track(s) found`);
 
     if (tracks.length > 0) {
-      const track = transcriptLang === 'auto'
-        ? tracks[0]
-        : (tracks.find(t => t.languageCode?.startsWith(transcriptLang)) ||
-           tracks.find(t => t.languageCode?.startsWith('en')) ||
-           tracks[0]);
+      const track = pickTrack(tracks, transcriptLang);
 
       if (track?.baseUrl) {
-        log(`Page extraction: using track lang="${track.languageCode}"`);
-        const baseUrl = track.baseUrl.replace(/&fmt=[^&]*/g, '');
-        for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
-          try {
-            const tResp = await fetchWithTimeout(baseUrl + suffix, { credentials: 'include' }, 12000);
-            if (!tResp.ok) continue;
-            const text = await tResp.text();
-            if (text.length < 10) continue;
-            const parsed = parseTranscriptText(text);
-            if (parsed) {
-              log(`Page extraction: ✅ Parsed (${parsed.length} chars)`);
-              return { title, transcript: parsed };
-            }
-          } catch (e) { log(`Fetch error: ${e.message}`); }
+        log(`Page extraction: using track lang="${track.languageCode}", kind="${track.kind || 'standard'}"`);
+        const got = await fetchCaptionTrack(track, lengthSeconds, async (url) => {
+          const tResp = await fetchWithTimeout(url, { credentials: 'include' }, 12000);
+          return tResp.ok ? await tResp.text() : null;
+        }, (m) => log(`Page extraction: ${m}`));
+
+        if (got) {
+          log(`Page extraction: ✅ Parsed (${got.text.length} chars, coverage ${got.coverage})`);
+          return {
+            title, transcript: got.text, lengthSeconds,
+            lang: track.languageCode || null, kind: track.kind || 'standard',
+            coverage: got.coverage, complete: got.complete
+          };
         }
       }
     }
@@ -164,7 +224,15 @@ export async function fetchViaGetTranscript(videoId, log, transcriptLang = 'en')
     const transcript = parseGetTranscriptResponse(data, log);
     if (transcript) {
       log(`Transcript extracted (${transcript.length} chars)`);
-      return { title, transcript };
+      // get_transcript carries no timings, so coverage cannot be measured — but a
+      // response far too short for the video's duration must not be accepted as
+      // final, or it short-circuits the Android and tab strategies.
+      const thin = looksTruncated(transcript, lengthSeconds);
+      if (thin) log(`⚠️ Only ${transcript.length} chars for a ${lengthSeconds}s video — treating as partial`);
+      return {
+        title, transcript, lengthSeconds, lang: null, kind: 'get_transcript',
+        coverage: thin ? 'suspect' : 'unknown', complete: !thin
+      };
     }
     log('No transcript content in response');
     return null;
@@ -211,12 +279,27 @@ export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
       if (triggered) return;
       triggered = true;
       if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+      // Disarm the load watchdog now: it used to stay armed while the injected
+      // script ran, so a slow extraction (three caption formats, each its own
+      // executeScript) could have the tab removed from under it at 55 s and lose
+      // a transcript that was already downloading.
+      if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
       chrome.tabs.onUpdated.removeListener(onUpdated);
       log(`Tab ${tabId} — ${reason}. Waiting ${delayMs / 1000}s...`);
       await sleep(delayMs);
-      const result = await runTabScript(tabId, videoId, transcriptLang, log);
+      // …but keep a hard ceiling so a wedged executeScript can never leave the
+      // batch (and a background tab) hanging forever.
+      let extraction = null;
+      try {
+        extraction = await Promise.race([
+          runTabScript(tabId, videoId, transcriptLang, log),
+          sleep(90000).then(() => { log('Extraction timed out after 90s'); return null; })
+        ]);
+      } catch (e) {
+        log(`Extraction error: ${e.message}`);
+      }
       cleanup();
-      resolve(result);
+      resolve(extraction);
     };
 
     const onUpdated = (id, changeInfo) => {
@@ -255,186 +338,170 @@ export async function tabFetchTranscript(videoId, log, transcriptLang = 'en') {
   });
 }
 
+// Resolve the caption track from inside the page, then pull each format through
+// the page's own fetch(). The body is parsed by the extension (single parser in
+// transcript-parse.js) instead of a copy inlined in the injected script.
 async function runTabScript(tabId, videoId, transcriptLang, log) {
+  const resolveInPage = async (vid, tLang, config) => {
+    const log = [];
+    const L = (m) => log.push(m);
+
+    // Same-lang track selection as pickTrack() in the extension: prefer an exact
+    // language match, then the same base language, then English, and prefer a
+    // human-written track over the auto-generated (ASR) one.
+    const choose = (tracks) => {
+      if (!tracks || !tracks.length) return null;
+      const scored = tracks.map((t, i) => {
+        const code = String(t.languageCode || '');
+        let s = 0;
+        if (tLang && tLang !== 'auto') {
+          if (code === tLang) s += 100;
+          else if (code.split('-')[0] === tLang) s += 80;
+          else if (code.split('-')[0] === 'en') s += 20;
+        }
+        if (t.kind !== 'asr') s += 10;
+        return { t, i, s };
+      });
+      scored.sort((a, b) => (b.s - a.s) || (a.i - b.i));
+      return scored[0].t?.baseUrl ? scored[0].t : (tracks.find(t => t.baseUrl) || null);
+    };
+
+    const fromPlayer = (data) => {
+      const title = data?.videoDetails?.title || vid;
+      const lengthSeconds = Number(data?.videoDetails?.lengthSeconds) || null;
+      const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+      L(`tracks=${tracks.length}, duration=${lengthSeconds ?? '?'}s`);
+      const track = choose(tracks);
+      if (!track) return null;
+      return {
+        title, lengthSeconds, baseUrl: track.baseUrl,
+        trackLang: track.languageCode || null, kind: track.kind || 'standard'
+      };
+    };
+
+    L('Trying Android API from page context...');
+    try {
+      const resp = await fetch('/youtubei/v1/player', {
+        method: 'POST',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'ANDROID',
+              clientVersion: config.androidClientVersion,
+              androidSdkVersion: config.androidSdkVersion,
+              hl: 'en'
+            }
+          },
+          videoId: vid,
+          contentCheckOk: true,
+          racyCheckOk: true
+        })
+      });
+      L(`Android API HTTP: ${resp.status}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
+          L(`Wrong video in Android response (found ${data.videoDetails.videoId}) — skip`);
+        } else {
+          const r = fromPlayer(data);
+          if (r) return { ...r, source: 'android', log };
+          L('Android response had no usable track');
+        }
+      }
+    } catch (e) { L(`Android API error: ${e.message}`); }
+
+    L('Reading ytInitialPlayerResponse from page...');
+    let data = window.ytInitialPlayerResponse;
+    if (!data) {
+      for (const sc of document.querySelectorAll('script:not([src])')) {
+        const txt = sc.textContent;
+        if (!txt.includes('ytInitialPlayerResponse')) continue;
+        const idx = txt.indexOf('ytInitialPlayerResponse');
+        const start = txt.indexOf('{', idx);
+        if (start === -1) continue;
+        let depth = 0, inStr = false, esc = false;
+        for (let i = start; i < txt.length; i++) {
+          const c = txt[i];
+          if (esc) { esc = false; continue; }
+          if (c === '\\' && inStr) { esc = true; continue; }
+          if (c === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (c === '{') depth++;
+          else if (c === '}' && --depth === 0) {
+            try { data = JSON.parse(txt.slice(start, i + 1)); } catch (_) {}
+            break;
+          }
+        }
+        if (data) break;
+      }
+    }
+
+    if (!data) { L('ytInitialPlayerResponse not found'); return { log }; }
+
+    if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
+      L(`Wrong video in tab (found ${data.videoDetails.videoId}, expected ${vid})`);
+      return { mismatch: true, log };
+    }
+
+    const r = fromPlayer(data);
+    return r ? { ...r, source: 'page', log } : { title: data?.videoDetails?.title || vid, log };
+  };
+
+  // Executed once per caption format; keeps the page's cookies and Origin.
+  const fetchInPage = async (url) => {
+    try {
+      const r = await fetch(url, { credentials: 'omit' });
+      if (!r.ok) return { status: r.status, text: null };
+      return { status: r.status, text: await r.text() };
+    } catch (e) {
+      return { status: 0, error: e.message, text: null };
+    }
+  };
+
   try {
-    log('Running script in MAIN world...');
+    log('Resolving caption track in MAIN world...');
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: async (vid, tLang, config) => {
-        const log = [];
-        const L = (m) => log.push(m);
-
-        L('Trying Android API from page context...');
-        try {
-          const resp = await fetch('/youtubei/v1/player', {
-            method: 'POST',
-            credentials: 'omit',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              context: {
-                client: {
-                  clientName: 'ANDROID',
-                  clientVersion: config.androidClientVersion,
-                  androidSdkVersion: config.androidSdkVersion,
-                  hl: 'en'
-                }
-              },
-              videoId: vid,
-              contentCheckOk: true,
-              racyCheckOk: true
-            })
-          });
-          L(`Android API HTTP: ${resp.status}`);
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
-              L(`Wrong video in Android response (found ${data.videoDetails.videoId}, expected ${vid}) — skip`);
-            } else {
-            const title = data?.videoDetails?.title || vid;
-            const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-            L(`tracks=${tracks.length}`);
-            if (tracks.length > 0) {
-              const track = tLang === 'auto'
-                ? tracks[0]
-                : (tracks.find(t => t.languageCode?.startsWith(tLang)) ||
-                   tracks.find(t => t.languageCode?.startsWith('en')) ||
-                   tracks[0]);
-              if (!track?.baseUrl) { L('No baseUrl on track — skip'); }
-              else {
-              const base = track.baseUrl.replace(/&fmt=[^&]*/g, '');
-              for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
-                try {
-                  const r = await fetch(base + suffix, { credentials: 'omit' });
-                  const txt = await r.text();
-                  L(`Transcript fetch: HTTP ${r.status}, length ${txt.length}`);
-                  if (txt.length > 10) {
-                    try {
-                      const j = JSON.parse(txt);
-                      const lines = (j.events || []).filter(e => e.segs)
-                        .map(e => e.segs.map(s => s.utf8 || '').join('').replace(/\n/g,' ').trim())
-                        .filter(t => t && !/^\[.*\]$/.test(t));
-                      if (lines.length > 0) return { title, transcript: lines.join('\n'), log };
-                    } catch (_) {}
-                    const xmlLines = [...txt.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
-                      .map(m => m[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"').trim())
-                      .filter(Boolean);
-                    if (xmlLines.length > 0) return { title, transcript: xmlLines.join('\n'), log };
-                  }
-                } catch (e) { L(`Fetch err: ${e.message}`); }
-              }
-              }
-            }
-            }
-          }
-        } catch (e) { L(`Android API error: ${e.message}`); }
-
-        L('Reading ytInitialPlayerResponse from page...');
-        let data = window.ytInitialPlayerResponse;
-        if (!data) {
-          for (const sc of document.querySelectorAll('script:not([src])')) {
-            const txt = sc.textContent;
-            if (!txt.includes('ytInitialPlayerResponse')) continue;
-            const idx = txt.indexOf('ytInitialPlayerResponse');
-            const start = txt.indexOf('{', idx);
-            if (start === -1) continue;
-            let depth = 0, inStr = false, esc = false;
-            for (let i = start; i < txt.length; i++) {
-              const c = txt[i];
-              if (esc) { esc = false; continue; }
-              if (c === '\\' && inStr) { esc = true; continue; }
-              if (c === '"') { inStr = !inStr; continue; }
-              if (inStr) continue;
-              if (c === '{') depth++;
-              else if (c === '}' && --depth === 0) {
-                try { data = JSON.parse(txt.slice(start, i + 1)); } catch (_) {}
-                break;
-              }
-            }
-            if (data) break;
-          }
-        }
-
-        if (!data) { L('ytInitialPlayerResponse not found'); return { title: vid, transcript: null, log }; }
-
-        if (data?.videoDetails?.videoId && data.videoDetails.videoId !== vid) {
-          L(`Wrong video in tab (found ${data.videoDetails.videoId} "${data?.videoDetails?.title}", expected ${vid}) — tab shows a different video`);
-          return { title: vid, transcript: null, log, mismatch: true };
-        }
-
-        const title = data?.videoDetails?.title || vid;
-        const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-        L(`ytInitialPlayerResponse OK: title="${title}", tracks=${tracks.length}`);
-        if (!tracks.length) return { title, transcript: null, log };
-
-        const track = tLang === 'auto'
-          ? tracks[0]
-          : (tracks.find(t => t.languageCode?.startsWith(tLang)) ||
-             tracks.find(t => t.languageCode?.startsWith('en')) ||
-             tracks[0]);
-        if (!track?.baseUrl) return { title, transcript: null, log };
-
-        const base = track.baseUrl.replace(/&fmt=[^&]*/g, '');
-        for (const suffix of ['&fmt=json3', '', '&fmt=srv3']) {
-          try {
-            const r = await fetch(base + suffix, { credentials: 'omit' });
-            const txt = await r.text();
-            L(`Transcript HTTP ${r.status}, length ${txt.length}`);
-            if (txt.length < 10) { L('Empty body'); continue; }
-            try {
-              const j = JSON.parse(txt);
-              const lines = (j.events || []).filter(e => e.segs)
-                .map(e => e.segs.map(s => s.utf8 || '').join('').replace(/\n/g,' ').trim())
-                .filter(t => t && !/^\[.*\]$/.test(t));
-              if (lines.length > 0) return { title, transcript: lines.join('\n'), log };
-            } catch (_) {}
-            const xmlLines = [...txt.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
-              .map(m => m[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"').trim())
-              .filter(Boolean);
-            if (xmlLines.length > 0) return { title, transcript: xmlLines.join('\n'), log };
-          } catch (e) { L(`Error: ${e.message}`); }
-        }
-        return { title, transcript: null, log };
-      },
+      func: resolveInPage,
       args: [videoId, transcriptLang, CONFIG.youtube]
     });
 
-    const tabResult = results?.[0]?.result;
-    if (tabResult?.log?.length) log(`Script log:\n${tabResult.log.map(l => '  ' + l).join('\n')}`);
-    if (tabResult?.transcript) {
-      log(`Transcript found (${tabResult.transcript.length} chars)`);
-      return tabResult;
-    }
-    if (tabResult?.mismatch) {
+    const meta = results?.[0]?.result;
+    if (meta?.log?.length) log(`Script log:\n${meta.log.map(l => '  ' + l).join('\n')}`);
+    if (meta?.mismatch) {
       log('Reused tab shows a different video');
       return { transcript: null, mismatch: true };
     }
-    log('No transcript from tab');
-    return null;
+    if (!meta?.baseUrl) { log('No caption track resolved in tab'); return null; }
+    log(`Track lang="${meta.trackLang}", kind="${meta.kind}" (via ${meta.source})`);
+
+    const got = await fetchCaptionTrack(meta, meta.lengthSeconds, async (url) => {
+      const out = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN', func: fetchInPage, args: [url]
+      });
+      const r = out?.[0]?.result;
+      if (r?.error) throw new Error(r.error);
+      return r?.text ?? null;
+    }, (m) => log(`  ${m}`));
+
+    if (!got) { log('No transcript from tab'); return null; }
+    log(`Transcript found (${got.text.length} chars, coverage ${got.coverage})`);
+    return {
+      title: meta.title || videoId,
+      transcript: got.text,
+      lengthSeconds: meta.lengthSeconds,
+      lang: meta.trackLang,
+      kind: meta.kind,
+      coverage: got.coverage,
+      complete: got.complete
+    };
   } catch (e) {
     log(`Scripting error: ${e.message}`);
     return null;
   }
-}
-
-function parseTranscriptText(text) {
-  try {
-    const json = JSON.parse(text);
-    const lines = (json.events || [])
-      .filter(e => e.segs)
-      .map(e => e.segs.map(s => s.utf8 || '').join('').replace(/\n/g, ' ').trim())
-      .filter(t => t && !/^\[.*\]$/.test(t));
-    if (lines.length > 0) return lines.join('\n');
-  } catch (_) {}
-
-  const xmlLines = [...text.matchAll(/<text[^>]*>([^<]*)<\/text>/g)]
-    .map(m => m[1]
-      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-      .replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim())
-    .filter(Boolean);
-  if (xmlLines.length > 0) return xmlLines.join('\n');
-
-  return null;
 }
 
 function extractYtInitialPlayerResponse(html) {

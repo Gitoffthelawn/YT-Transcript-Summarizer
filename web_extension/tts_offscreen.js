@@ -226,6 +226,26 @@ function doSpeak(text) {
   setTimeout(() => { if (utteranceId === id) speakChunk(id); }, CANCEL_DELAY);
 }
 
+// ── Blob hosting for chrome.downloads ────────────────────────────────────────
+// Service workers have no URL.createObjectURL, so large transcripts used to be
+// squeezed into a data: URL that the browser rejected past ~2 MB. This document
+// mints the blob: URL on the worker's behalf (see modules/downloads.js).
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'make-blob-url') {
+    try {
+      const blob = new Blob([msg.text ?? ''], { type: msg.mime || 'text/plain;charset=utf-8' });
+      sendResponse({ url: URL.createObjectURL(blob) });
+    } catch (e) {
+      sendResponse({ error: e?.message || String(e) });
+    }
+    return false;
+  }
+  if (msg?.type === 'revoke-blob-url') {
+    try { URL.revokeObjectURL(msg.url); } catch (_) {}
+    return false;
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'tts-speak': {

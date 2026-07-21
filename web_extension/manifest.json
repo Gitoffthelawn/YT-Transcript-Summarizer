@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT Transcript Summarizer",
-  "version": "10.13.12",
+  "version": "10.14.0",
   "description": "Summarize YouTube videos with Claude, OpenAI, Gemini and more — reliable transcript extraction via InnerTube API.",
   "browser_specific_settings": {
     "gecko": {
@@ -37,6 +37,8 @@
   },
   "host_permissions": [
     "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://music.youtube.com/*",
     "https://youtu.be/*",
     "https://api.anthropic.com/*",
     "https://claude.ai/*",
@@ -48,12 +50,17 @@
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "content_scripts": [
     {
       "matches": [
         "https://claude.ai/*"
       ],
       "js": [
+        "paste_common.js",
         "claude_paste.js"
       ],
       "run_at": "document_idle"
@@ -63,6 +70,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "paste_common.js",
         "chatgpt_paste.js"
       ],
       "run_at": "document_idle"
@@ -72,6 +80,7 @@
         "https://gemini.google.com/*"
       ],
       "js": [
+        "paste_common.js",
         "gemini_paste.js"
       ],
       "run_at": "document_idle"

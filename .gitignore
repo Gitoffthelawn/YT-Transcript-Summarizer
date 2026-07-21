@@ -29,3 +29,6 @@ web_extension/web_extension.zip
 # Logs
 *.log
 npm-debug.log*
+
+# Chrome unpacked-load artifact
+web_extension/_metadata/

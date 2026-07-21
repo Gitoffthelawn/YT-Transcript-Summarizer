@@ -162,11 +162,12 @@ export async function setJobLang(id, lang) {
 export function renderJobs() {
   const clearBtn = document.getElementById('btn-clear-queue');
   if (clearBtn) {
-    clearBtn.classList.toggle('hidden', state.jobs.length === 0);
+    clearBtn.classList.toggle('hidden', state.jobs.filter(j => !j.cleared).length === 0);
     clearBtn.disabled = state.running;
   }
   const list = document.getElementById('job-list');
-  if (state.jobs.length === 0) {
+  const visibleJobs = state.jobs.filter(j => !j.cleared);
+  if (visibleJobs.length === 0) {
     list.innerHTML = '<div class="empty-state">Add a URL or open a YouTube video and click 📌<span class="empty-hint">Hover the mode tabs above for a description of each mode</span></div>';
     return;
   }
@@ -177,7 +178,7 @@ export function renderJobs() {
   const globalLen = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
   const dis = state.running ? 'disabled' : '';
 
-  list.innerHTML = state.jobs.map(j => {
+  list.innerHTML = visibleJobs.map(j => {
     const hasCustom = !!j.prompt || (j.format != null) || (j.length != null) || (j.lang != null);
     const activeFmt = j.format ?? globalFmt;
     const activeLen = j.length ?? globalLen;
@@ -257,21 +258,33 @@ export function updateProgress() {
   document.getElementById('progress-label').textContent = `${done}/${total}`;
 }
 
+// Fade a finished job out of the list. It is only *flagged*, never spliced out
+// of the stored array while a batch is running: the background addresses jobs by
+// id and rewrites the same array, so deleting entries here used to make status
+// updates land on nothing (and, with the old index-based resume, made the runner
+// skip the next video entirely). finalizeBatch() drops the flagged ones.
 export function scheduleJobAutoClear(id) {
   setTimeout(async () => {
-    state.jobs = state.jobs.filter(j => j.id !== id);
+    const job = state.jobs.find(j => j.id === id);
+    if (!job) return;
+    job.cleared = true;
+    if (!state.running) {
+      state.jobs = state.jobs.filter(j => !j.cleared);
+    }
     await chrome.storage.local.set({ jobs: state.jobs });
+
     const entry = document.getElementById(`job-entry-${id}`);
+    const visible = state.jobs.filter(j => !j.cleared).length;
     if (entry) {
       entry.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
       entry.style.opacity = '0';
       entry.style.transform = 'translateX(24px)';
       setTimeout(() => {
         entry.remove();
-        if (state.jobs.length === 0) renderJobs();
+        if (visible === 0) renderJobs();
       }, 500);
-    } else {
-      if (state.jobs.length === 0) renderJobs();
+    } else if (visible === 0) {
+      renderJobs();
     }
   }, 3000);
 }

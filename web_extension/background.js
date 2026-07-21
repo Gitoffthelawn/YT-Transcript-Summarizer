@@ -3,6 +3,7 @@ import { callLLM } from './modules/llm-api.js';
 import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript, tabBrowseContinuations } from './modules/youtube-api.js';
 import { CONFIG } from './modules/config.js';
 import { sleep, fetchWithTimeout } from './modules/utils.js';
+import { downloadText, safeFilename, ensureOffscreenDocument } from './modules/downloads.js';
 
 let popupPort = null;
 let isRunning = false;
@@ -18,47 +19,58 @@ async function batchCancelled() {
   return !running;
 }
 
-// A sleep that returns early with `true` as soon as a stop is requested.
+// A sleep that returns early with `true` as soon as a stop is requested — both
+// in this worker and via the persisted flag (a Stop pressed while this worker
+// was asleep only shows up in storage).
 async function cancellableSleep(ms) {
   const step = 250;
   for (let waited = 0; waited < ms; waited += step) {
     if (cancelRequested) return true;
+    // Polling storage on every step would be wasteful; once a second is plenty.
+    if (waited % 1000 === 0 && waited > 0 && await batchCancelled()) return true;
     await sleep(Math.min(step, ms - waited));
   }
-  return cancelRequested;
+  return await batchCancelled();
+}
+
+/**
+ * Claim the batch runner. The claim (`isRunning = true`) happens synchronously,
+ * before any await: the alarm handler and the setTimeout backstop both fire for
+ * the same job and used to interleave their async storage reads, starting the
+ * runner twice — the same video processed twice, two chat tabs opened.
+ */
+function startRun(startJobId) {
+  if (isRunning) return;
+  isRunning = true;
+  (async () => {
+    try {
+      const { running } = await chrome.storage.local.get('running');
+      if (!running || cancelRequested) { isRunning = false; return; }
+      await runBatch(startJobId);
+    } catch (e) {
+      console.error('[YT Summarizer] batch crashed:', e);
+      isRunning = false;
+      await chrome.storage.local.set({ running: false }).catch(() => {});
+    }
+  })();
 }
 
 // Resume batch if service worker was restarted mid-batch
-chrome.storage.local.get(['running', 'nextJobFromIndex', 'nextJobAt']).then(({ running, nextJobFromIndex, nextJobAt }) => {
+chrome.storage.local.get(['running', 'nextJobId', 'nextJobAt']).then(({ running, nextJobId, nextJobAt }) => {
   if (!running || isRunning) return;
   if (nextJobAt && Date.now() < nextJobAt) {
-    // Still in the delay window — recreate alarm for the remaining time
+    // Still in the delay window — recreate the alarm for the remaining time.
     const ms = nextJobAt - Date.now();
     chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
-    if (ms < 60000) {
-      setTimeout(() => {
-        chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
-          if (running && !isRunning) {
-            isRunning = true;
-            runBatch(nextJobFromIndex ?? 0);
-          }
-        });
-      }, ms);
-    }
+    if (ms < 60000) setTimeout(() => startRun(nextJobId ?? null), ms);
   } else {
-    isRunning = true;
-    runBatch(nextJobFromIndex ?? 0);
+    startRun(nextJobId ?? null);
   }
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== 'nextJob') return;
-  chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
-    if (running && !isRunning) {
-      isRunning = true;
-      runBatch(nextJobFromIndex ?? 0);
-    }
-  });
+  chrome.storage.local.get('nextJobId').then(({ nextJobId }) => startRun(nextJobId ?? null));
 });
 
 // ── TTS Offscreen ─────────────────────────────────────────────────────────────
@@ -70,20 +82,6 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
 });
 
-async function ensureTTSOffscreen() {
-  if (!chrome.offscreen) return false;
-  try {
-    if (!(await chrome.offscreen.hasDocument())) {
-      await chrome.offscreen.createDocument({
-        url: chrome.runtime.getURL('tts_offscreen.html'),
-        reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
-        justification: 'Text-to-Speech playback via Web Speech API'
-      });
-    }
-    return true;
-  } catch (e) { return false; }
-}
-
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'popup') return;
   popupPort = port;
@@ -94,21 +92,19 @@ chrome.runtime.onConnect.addListener((port) => {
       chrome.alarms.clear('nextJob');
       await chrome.storage.local.set({
         jobs: msg.jobs, settings: msg.settings,
-        nextJobFromIndex: null, nextJobAt: null
+        running: true, nextJobId: null, nextJobAt: null
       });
-      if (!isRunning) {
-        isRunning = true;
-        runBatch(0);
-      }
+      startRun(null);
     }
     if (msg.type === 'resetState') {
       cancelRequested = true;
       isRunning = false;
       chrome.alarms.clear('nextJob');
-      await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
+      chrome.alarms.clear('keepAlive');
+      await chrome.storage.local.set({ running: false, nextJobId: null, nextJobAt: null });
     }
     if (msg.type && msg.type.startsWith('tts-')) {
-      const ok = await ensureTTSOffscreen();
+      const ok = await ensureOffscreenDocument();
       if (ok) {
         chrome.runtime.sendMessage(msg).catch(() => {});
       } else {
@@ -121,18 +117,48 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // ── Batch Runner ──────────────────────────────────────────────────────────────
-async function runBatch(fromIndex = 0) {
-  if (fromIndex === 0) {
-    await chrome.storage.local.set({ running: true });
-    chrome.alarms.create('keepAlive', { periodInMinutes: 1 });
-  }
+// A job still needs work while it is queued or active. `error` is terminal for
+// the current run (a failed job must not be picked up again by the same loop);
+// `done` and `unavailable` are terminal for good — those videos genuinely have
+// no captions, and retrying them on every Run cost a full three-strategy sweep
+// (including a 55 s throwaway tab) per video.
+const isPending = (j) => j.status === 'queued' || j.status === 'active';
 
-  const { jobs = [], settings = {} } = await chrome.storage.local.get(['jobs', 'settings']);
+// A fresh run retries whatever failed last time and re-queues jobs left "active"
+// by a crash, which is what the index-based loop used to do implicitly.
+async function requeueFailedJobs() {
+  const { jobs = [] } = await chrome.storage.local.get('jobs');
+  let changed = false;
+  for (const j of jobs) {
+    if (j.status === 'error' || j.status === 'active') {
+      j.status = 'queued';
+      j.statusText = 'Queued';
+      changed = true;
+    }
+  }
+  if (changed) await chrome.storage.local.set({ jobs });
+  return jobs;
+}
+
+/**
+ * @param {number|null} startJobId resume point, addressed by job *id*.
+ *   It used to be an array index, but the popup rewrites the jobs array while
+ *   the batch is between videos — every removal shifted the indices down and the
+ *   runner silently skipped a video on resume.
+ */
+async function runBatch(startJobId = null) {
+  // Keep the worker alive for the whole batch, including runs resumed after a
+  // worker restart (where this alarm was previously never re-created).
+  chrome.alarms.create('keepAlive', { periodInMinutes: 1 });
+
+  const { settings = {} } = await chrome.storage.local.get('settings');
   const mode = settings.mode || 'web';
 
-  if (settings.combinedPrompt && fromIndex === 0) {
-    const pending = jobs.filter(j => j.status === 'queued' || j.status === 'error');
-    if (pending.length > 1) {
+  if (startJobId === null) await requeueFailedJobs();
+
+  if (settings.combinedPrompt && startJobId === null) {
+    const { jobs = [] } = await chrome.storage.local.get('jobs');
+    if (jobs.filter(isPending).length > 1) {
       await runBatchCombined(jobs, settings);
       if (await batchCancelled()) { isRunning = false; return; }
       await finalizeBatch();
@@ -140,41 +166,52 @@ async function runBatch(fromIndex = 0) {
     }
   }
 
-  for (let i = fromIndex; i < jobs.length; i++) {
+  let resumeId = startJobId;
+  // Belt and braces: if a status write is ever lost, the id-based selector would
+  // otherwise hand back the same job forever.
+  const processed = new Set();
+
+  for (;;) {
     if (await batchCancelled()) { isRunning = false; return; }
 
-    const job = jobs[i];
-    if (job.status === 'done') continue;
+    // Re-read every iteration: processJob writes statuses back through storage,
+    // so a snapshot taken once at the top goes stale immediately.
+    const { jobs = [] } = await chrome.storage.local.get('jobs');
 
+    let idx = -1;
+    if (resumeId !== null && resumeId !== undefined) {
+      const at = jobs.findIndex(j => j.id === resumeId);
+      if (at !== -1 && isPending(jobs[at])) idx = at;
+      resumeId = null; // only honoured once
+    }
+    if (idx === -1) idx = jobs.findIndex(j => isPending(j) && !processed.has(j.id));
+    if (idx === -1) break; // nothing left to do
+
+    const job = jobs[idx];
+    processed.add(job.id);
     await processJob(job, settings);
 
     if (await batchCancelled()) { isRunning = false; return; }
 
-    const hasMore = jobs.slice(i + 1).some(j => j.status !== 'done' && j.status !== 'error' && j.status !== 'unavailable');
-    if (!hasMore) break;
+    const { jobs: after = [] } = await chrome.storage.local.get('jobs');
+    const next = after.find(j => j.id !== job.id && isPending(j) && !processed.has(j.id));
+    if (!next) break;
 
     if (mode === 'web') {
-      const ms = (settings.webDelay ?? 30) * 1000;
+      const ms = Math.max(1000, (settings.webDelay ?? 30) * 1000);
       const nextJobAt = Date.now() + ms;
-      await chrome.storage.local.set({ nextJobFromIndex: i + 1, nextJobAt });
+      await chrome.storage.local.set({ nextJobId: next.id, nextJobAt });
       safePost({ type: 'countdown', nextJobAt });
+      // chrome.alarms clamps sub-30 s delays, so a short webDelay relies on the
+      // setTimeout; startRun() makes the double trigger harmless.
       chrome.alarms.create('nextJob', { delayInMinutes: ms / 60000 });
-      if (ms < 60000) {
-        setTimeout(() => {
-          chrome.storage.local.get(['running', 'nextJobFromIndex']).then(({ running, nextJobFromIndex }) => {
-            if (running && !isRunning) {
-              isRunning = true;
-              runBatch(nextJobFromIndex ?? 0);
-            }
-          });
-        }, ms);
-      }
+      if (ms < 60000) setTimeout(() => startRun(next.id), ms);
       isRunning = false;
       return;
-    } else {
-      const ms = mode === 'api' ? 8000 + Math.random() * 7000 : 3000 + Math.random() * 4000;
-      if (await cancellableSleep(ms)) { isRunning = false; return; }
     }
+
+    const pause = mode === 'api' ? 8000 + Math.random() * 7000 : 3000 + Math.random() * 4000;
+    if (await cancellableSleep(pause)) { isRunning = false; return; }
   }
 
   await finalizeBatch();
@@ -186,7 +223,10 @@ async function finalizeBatch() {
   const doneCount = jobs.filter(j => j.status === 'done').length;
   const noTxCount = jobs.filter(j => j.status === 'unavailable').length;
   const failedCount = jobs.filter(j => j.status === 'error').length;
-  await chrome.storage.local.set({ running: false, nextJobFromIndex: null, nextJobAt: null });
+  // Jobs the popup faded out of the list are only dropped here, once nothing
+  // can address them by id any more.
+  const kept = jobs.filter(j => !j.cleared);
+  await chrome.storage.local.set({ jobs: kept, running: false, nextJobId: null, nextJobAt: null });
   chrome.alarms.clear('keepAlive');
   chrome.alarms.clear('nextJob');
   safePost({ type: 'batchDone', summary: { done: doneCount, noTranscript: noTxCount, failed: failedCount } });
@@ -208,50 +248,52 @@ async function finalizeBatch() {
   }
 }
 
+// ── Transcript acquisition ────────────────────────────────────────────────────
+function videoIdOf(url) {
+  const m = String(url).match(/(?:v=|youtu\.be\/|shorts\/|embed\/|\/v\/|live\/)([0-9A-Za-z_-]{11})/);
+  return m ? m[1] : null;
+}
+
+// A partial transcript is worse than a late one: keep looking, and only fall
+// back to the best partial result once every strategy has been tried.
+async function acquireTranscript(videoId, transcriptLang, log) {
+  const strategies = [
+    ['S1-PageScrape', fetchViaGetTranscript],
+    ['S2-Android', fetchViaAndroidPlayer],
+    ['S3-Tab', tabFetchTranscript]
+  ];
+
+  let best = null;
+  for (const [tag, fn] of strategies) {
+    try {
+      const r = await fn(videoId, (msg) => log(`[${tag}] ${msg}`), transcriptLang);
+      if (r?.transcript) {
+        if (r.complete !== false) { log(`[${tag}] ✅ Success (coverage ${r.coverage ?? 'unknown'})`); return r; }
+        log(`[${tag}] ⚠️ Partial transcript (coverage ${r.coverage}) — trying the next strategy`);
+        if (!best || r.transcript.length > best.transcript.length) best = r;
+      }
+    } catch (e) {
+      log(`[${tag}] ❌ Exception: ${e.message}`);
+    }
+  }
+  if (best) log(`⚠️ No complete transcript; using the longest partial one (coverage ${best.coverage})`);
+  return best;
+}
+
 // ── Process Single Job ────────────────────────────────────────────────────────
 async function processJob(job, settings) {
+  let debugLog = '';
   try {
-    const videoIdMatch = job.url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|\/v\/)([0-9A-Za-z_-]{11})/);
-    const videoId = videoIdMatch ? videoIdMatch[1] : null;
+    const videoId = videoIdOf(job.url);
     if (!videoId) throw new Error('Unable to extract video ID from URL.');
 
-    let result = null;
-    let debugLog = `=== DEBUG LOG v2.0 per ${videoId} ===\nURL: ${job.url}\n\n`;
-
+    debugLog = `=== DEBUG LOG v2.0 per ${videoId} ===\nURL: ${job.url}\n\n`;
     const transcriptLang = job.lang || settings.transcriptLang || 'en';
     debugLog += `Preferred transcript language: "${transcriptLang}"\n\n`;
     const effectivePrompt = job.prompt || settings.prompt;
 
-    // ── Strategy 1: YouTube page scraping (most reliable with browser cookies)
-    await updateJobStatus(job.id, 'active', '📋 Fetching YouTube page...');
-    try {
-      result = await fetchViaGetTranscript(videoId, (msg) => { debugLog += `[S1-PageScrape] ${msg}\n`; }, transcriptLang);
-      if (result) debugLog += `[S1-PageScrape] ✅ Success!\n`;
-    } catch (e) {
-      debugLog += `[S1-PageScrape] ❌ Exception: ${e.message}\n`;
-    }
-
-    // ── Strategy 2: InnerTube Player API (Android)
-    if (!result) {
-      await updateJobStatus(job.id, 'active', '📱 Trying Android InnerTube...');
-      try {
-        result = await fetchViaAndroidPlayer(videoId, (msg) => { debugLog += `[S2-Android] ${msg}\n`; }, transcriptLang);
-        if (result) debugLog += `[S2-Android] ✅ Success!\n`;
-      } catch (e) {
-        debugLog += `[S2-Android] ❌ Exception: ${e.message}\n`;
-      }
-    }
-
-    // ── Strategy 3: Real tab (fallback)
-    if (!result) {
-      await updateJobStatus(job.id, 'active', '🔍 Opening YouTube tab (fallback)...');
-      try {
-        result = await tabFetchTranscript(videoId, (msg) => { debugLog += `[S3-Tab] ${msg}\n`; }, transcriptLang);
-        if (result) debugLog += `[S3-Tab] ✅ Success!\n`;
-      } catch (e) {
-        debugLog += `[S3-Tab] ❌ Exception: ${e.message}\n`;
-      }
-    }
+    await updateJobStatus(job.id, 'active', '📋 Fetching transcript...');
+    const result = await acquireTranscript(videoId, transcriptLang, (m) => { debugLog += `${m}\n`; });
 
     if (!result?.transcript) {
       // Expected outcome for captionless / region- or age-restricted videos —
@@ -267,116 +309,88 @@ async function processJob(job, settings) {
     }
 
     const { title, transcript } = result;
-    debugLog += `\n✅ Transcript obtained: ${transcript.length} chars, title="${title}"\n`;
+    debugLog += `\n✅ Transcript obtained: ${transcript.length} chars, coverage ${result.coverage ?? 'unknown'}, lang "${result.lang || '?'}", title="${title}"\n`;
+
+    // Warnings the user must see in the output file, not only in the console.
+    const notes = [];
+    if (result.complete === false) {
+      notes.push(`⚠️ Incomplete transcript: the captions only cover ~${result.coverage} of the video.`);
+    }
+    if (transcriptLang !== 'auto' && result.lang && result.lang.split('-')[0] !== transcriptLang) {
+      notes.push(`ℹ️ No "${transcriptLang}" captions — used the "${result.lang}" track instead.`);
+    }
+    for (const n of notes) debugLog += `${n}\n`;
 
     const displayTitle = title || videoId;
     safePost({ type: 'jobTitleUpdate', jobId: job.id, title: displayTitle });
-    const safeTitle = displayTitle.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 100);
     const mode = settings.mode || 'web';
+    const shortTitle = displayTitle.slice(0, 40);
+    const warn = result.complete === false ? ` (⚠️ ${result.coverage} covered)` : '';
 
-    // ── Modalità: solo trascrizione
+    // ── Mode: transcript only
     if (mode === 'transcript') {
       await updateJobStatus(job.id, 'active', '💾 Saving transcript...');
-      await chrome.downloads.download({
-        url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(transcript),
-        filename: `${safeTitle}_transcript.txt`,
-        saveAs: false
-      });
+      const header = notes.length ? notes.join('\n') + '\n\n' : '';
+      await downloadText(header + transcript, safeFilename(displayTitle, videoId, { suffix: '_transcript', ext: 'txt' }));
       await addToHistory(job.url, displayTitle);
-      await updateJobStatus(job.id, 'done', `✅ Transcript saved: ${displayTitle.slice(0, 40)}`);
+      await updateJobStatus(job.id, 'done', `✅ Transcript saved${warn}: ${shortTitle}`);
       return;
     }
 
-    // ── Modalità: web
+    // ── Mode: web
     if (mode === 'web') {
       const provider = settings.provider || 'anthropic';
       const webUrl = CONFIG.providerWebUrls[provider];
-      if (!webUrl) {
-        throw new Error(`${provider} does not support Web mode. Use API mode instead.`);
-      }
-      const providerLabel = provider === 'anthropic' ? 'Claude.ai'
-                          : provider === 'openai'    ? 'ChatGPT'
-                          : provider === 'gemini'    ? 'Gemini'
-                          : provider;
+      if (!webUrl) throw new Error(`${provider} does not support Web mode. Use API mode instead.`);
+
+      const providerLabel = providerLabelOf(provider);
       await updateJobStatus(job.id, 'active', `🌐 Opening ${providerLabel}...`);
       const webContent = `${effectivePrompt}\n\n---\n\n${transcript}`;
-      if (!!settings.saveTranscriptFile) {
-        await chrome.downloads.download({
-          url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(webContent),
-          filename: `${safeTitle}_transcript.txt`,
-          saveAs: false
-        });
+
+      if (settings.saveTranscriptFile) {
+        await downloadText(webContent, safeFilename(displayTitle, videoId, { suffix: '_transcript', ext: 'txt' }));
       }
-      const shouldPaste = settings.autoPaste || settings.autoSubmit;
-      if (shouldPaste) {
-        await chrome.storage.local.set({
-          pendingLLMContent: { text: webContent, autoSubmit: !!settings.autoSubmit }
-        });
+      if (settings.autoPaste || settings.autoSubmit) {
+        await setPendingLLMContent(webContent, !!settings.autoSubmit);
       }
       await chrome.tabs.create({ url: webUrl, active: true });
+
       const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
-                      : settings.autoPaste   ? `✅ Pasted into ${providerLabel}`
-                      :                        `✅ Opened ${providerLabel} (transcript saved)`;
+                      : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
+                      :                       `✅ Opened ${providerLabel} (transcript saved)`;
       await addToHistory(job.url, displayTitle);
-      await updateJobStatus(job.id, 'done', `${doneLabel}: ${displayTitle.slice(0, 35)}`);
+      await updateJobStatus(job.id, 'done', `${doneLabel}${warn}: ${displayTitle.slice(0, 35)}`);
       return;
     }
 
-    // ── Modalità: API LLM
+    // ── Mode: LLM API
     const providerName = settings.provider || 'anthropic';
-    await updateJobStatus(job.id, 'active', `🤖 ${providerName} (${settings.model}) — transcript ${(transcript.length/1000).toFixed(1)}k chars...`);
-    let summary;
-    {
-      const maxRetries = 3;
-      const baseWaitSec = 60;
-      let lastErr;
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-          summary = await callLLM(transcript, { ...settings, prompt: effectivePrompt });
-          lastErr = null;
-          break;
-        } catch (llmErr) {
-          const m = llmErr.message || String(llmErr);
-          if ((m.includes('429') || m.includes('Too Many Requests') || m.includes('overloaded')) && attempt < maxRetries) {
-            const waitSec = baseWaitSec * Math.pow(2, attempt);
-            debugLog += `\n⚠️ Rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${waitSec}s...\n`;
-            for (let rem = waitSec; rem > 0; rem--) {
-              if (cancelRequested) throw new Error('Interrupted by user');
-              await updateJobStatus(job.id, 'active', `⏳ API rate limit — retry in ${rem}s (${attempt + 1}/${maxRetries})...`);
-              await sleep(1000);
-            }
-            lastErr = llmErr;
-            continue;
-          }
-          debugLog += `\n❌ LLM error: ${llmErr.message}\n`;
-          await chrome.downloads.download({
-            url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(debugLog),
-            filename: `debug_${videoId}.txt`,
-            saveAs: false
-          });
-          throw llmErr;
-        }
+    await updateJobStatus(job.id, 'active', `🤖 ${providerName} (${settings.model}) — transcript ${(transcript.length / 1000).toFixed(1)}k chars...`);
+
+    let llm;
+    try {
+      llm = await callLLMWithRetries(transcript, { ...settings, prompt: effectivePrompt }, job.id, (m) => { debugLog += m; });
+    } catch (llmErr) {
+      // Keep the per-video debug dump the API path has always produced, but
+      // never let a failed dump replace the real error message.
+      try {
+        await downloadText(debugLog, safeFilename(`debug_${videoId}`, `debug_${videoId}`, { ext: 'txt' }));
+      } catch (dlErr) {
+        console.warn('[YT Summarizer] could not save debug log:', dlErr);
       }
-      if (lastErr) {
-        debugLog += `\n❌ LLM error after retries: ${lastErr.message}\n`;
-        await chrome.downloads.download({
-            url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(debugLog),
-            filename: `debug_${videoId}.txt`,
-            saveAs: false
-        });
-        throw lastErr;
-      }
+      throw llmErr;
+    }
+    if (llm.truncated) {
+      notes.push(`⚠️ Transcript truncated to ${Math.round(llm.kept / 1000)}k of ${Math.round(llm.total / 1000)}k characters to fit the model's context — the summary does not cover the end of the video.`);
     }
 
-    const mdContent = `# ${displayTitle}\n\n${summary}`;
-    await chrome.downloads.download({
-      url: 'data:text/markdown;charset=utf-8,' + encodeURIComponent(mdContent),
-      filename: `${safeTitle}.md`,
-      saveAs: false
-    });
+    const banner = notes.length ? `> ${notes.join('\n> ')}\n\n` : '';
+    const mdContent = `# ${displayTitle}\n\n${banner}${llm.summary}`;
+    await downloadText(mdContent, safeFilename(displayTitle, videoId, { ext: 'md' }), 'text/markdown;charset=utf-8');
 
     await addToHistory(job.url, displayTitle);
-    await updateJobStatus(job.id, 'done', `✅ Completato: ${displayTitle.slice(0, 40)}`);
+    const apiWarn = llm.truncated ? ' (⚠️ truncated)' : warn;
+    await updateJobStatus(job.id, 'done', `✅ Completed${apiWarn}: ${shortTitle}`);
 
   } catch (err) {
     const msg = err.message || String(err);
@@ -385,35 +399,77 @@ async function processJob(job, settings) {
     } else {
       await updateJobStatus(job.id, 'error', `❌ ${msg.slice(0, 200)}`);
     }
-    console.warn(`[YT Summarizer] Error on ${job.url}:`, err);
+    console.warn(`[YT Summarizer] Error on ${job.url}:`, err, '\n', debugLog);
   }
+}
+
+function providerLabelOf(provider) {
+  return provider === 'anthropic' ? 'Claude.ai'
+       : provider === 'openai'    ? 'ChatGPT'
+       : provider === 'gemini'    ? 'Gemini'
+       : provider;
+}
+
+// The pasted payload is claimed by the content script only after it lands in the
+// chat box, and it expires: the old code deleted it up-front (losing the whole
+// transcript if the page was slow or the user was logged out) and kept it
+// forever otherwise, so an unrelated visit to claude.ai days later got a
+// surprise paste.
+async function setPendingLLMContent(text, autoSubmit) {
+  await chrome.storage.local.set({
+    pendingLLMContent: { text, autoSubmit, ts: Date.now() }
+  });
+}
+
+async function callLLMWithRetries(transcript, settings, jobId, appendLog) {
+  const maxRetries = 3;
+  const baseWaitSec = 60;
+  let lastErr = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await callLLM(transcript, settings);
+    } catch (llmErr) {
+      const m = llmErr.message || String(llmErr);
+      const retriable = m.includes('429') || m.includes('Too Many Requests') || m.includes('overloaded') || m.includes('503');
+      if (retriable && attempt < maxRetries) {
+        const waitSec = baseWaitSec * Math.pow(2, attempt);
+        appendLog(`\n⚠️ Rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${waitSec}s...\n`);
+        for (let rem = waitSec; rem > 0; rem--) {
+          if (await batchCancelled()) throw new Error('Interrupted by user');
+          await updateJobStatus(jobId, 'active', `⏳ API rate limit — retry in ${rem}s (${attempt + 1}/${maxRetries})...`);
+          await sleep(1000);
+        }
+        lastErr = llmErr;
+        continue;
+      }
+      lastErr = llmErr;
+      break;
+    }
+  }
+  appendLog(`\n❌ LLM error: ${lastErr?.message}\n`);
+  throw lastErr;
 }
 
 // ── Fetch transcript only (used by combined mode) ─────────────────────────────
 async function fetchTranscriptForJob(job, settings) {
-  const videoIdMatch = job.url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/|\/v\/)([0-9A-Za-z_-]{11})/);
-  const videoId = videoIdMatch ? videoIdMatch[1] : null;
+  const videoId = videoIdOf(job.url);
   if (!videoId) throw new Error('Unable to extract video ID from URL.');
 
   const transcriptLang = job.lang || settings.transcriptLang || 'en';
-  const noop = () => {};
-
-  let result = null;
-  try { result = await fetchViaGetTranscript(videoId, noop, transcriptLang); } catch (_) {}
-  if (!result) { try { result = await fetchViaAndroidPlayer(videoId, noop, transcriptLang); } catch (_) {} }
-  if (!result) { try { result = await tabFetchTranscript(videoId, noop, transcriptLang); } catch (_) {} }
+  const result = await acquireTranscript(videoId, transcriptLang, () => {});
 
   if (!result?.transcript) {
     const e = new Error('No transcript/captions available for this video.');
     e.noTranscript = true;
     throw e;
   }
-  return { videoId, title: result.title, transcript: result.transcript };
+  return { videoId, title: result.title, transcript: result.transcript, coverage: result.coverage, complete: result.complete };
 }
 
 // ── Combined Batch: all transcripts → single prompt ───────────────────────────
 async function runBatchCombined(jobs, settings) {
-  const pending = jobs.filter(j => j.status === 'queued' || j.status === 'error');
+  const pending = jobs.filter(isPending);
 
   const fetched = [];
   for (let i = 0; i < pending.length; i++) {
@@ -423,12 +479,13 @@ async function runBatchCombined(jobs, settings) {
     try {
       const result = await fetchTranscriptForJob(job, settings);
       fetched.push({ job, ...result });
-      await updateJobStatus(job.id, 'active', `📄 Transcript ready (${i + 1}/${pending.length})`);
+      const warn = result.complete === false ? ` (⚠️ ${result.coverage})` : '';
+      await updateJobStatus(job.id, 'active', `📄 Transcript ready${warn} (${i + 1}/${pending.length})`);
     } catch (err) {
       if (err.noTranscript) {
         await updateJobStatus(job.id, 'unavailable', '⚠️ No transcript available for this video');
       } else {
-        await updateJobStatus(job.id, 'error', `❌ ${err.message.slice(0, 200)}`);
+        await updateJobStatus(job.id, 'error', `❌ ${(err.message || String(err)).slice(0, 200)}`);
       }
     }
     if (i < pending.length - 1) {
@@ -439,86 +496,82 @@ async function runBatchCombined(jobs, settings) {
   if (fetched.length === 0 || await batchCancelled()) return;
 
   const combinedTranscript = fetched.map((r, i) =>
-    `## Video ${i + 1}: ${r.title || r.videoId}\nSource: ${r.job.url}\n\n${r.transcript}`
+    `## Video ${i + 1}: ${r.title || r.videoId}\nSource: ${r.job.url}\n` +
+    (r.complete === false ? `> ⚠️ Incomplete transcript (~${r.coverage} of the video)\n` : '') +
+    `\n${r.transcript}`
   ).join('\n\n---\n\n');
 
   const combinedContent = `${settings.prompt}\n\n---\n\n${combinedTranscript}`;
   const mode = settings.mode || 'web';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-  if (mode === 'transcript') {
-    await chrome.downloads.download({
-      url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(combinedTranscript),
-      filename: `combined_transcripts_${Date.now()}.txt`,
-      saveAs: false
-    });
-    for (const r of fetched) {
-      await addToHistory(r.job.url, r.title);
-      await updateJobStatus(r.job.id, 'done', '✅ Combined transcript saved');
-    }
-    return;
-  }
-
-  if (mode === 'web') {
-    const provider = settings.provider || 'anthropic';
-    const webUrl = CONFIG.providerWebUrls[provider];
-    if (!webUrl) {
-      for (const r of fetched) await updateJobStatus(r.job.id, 'error', `❌ ${provider} does not support Web mode.`);
+  try {
+    if (mode === 'transcript') {
+      await downloadText(combinedTranscript, `combined_transcripts_${stamp}.txt`);
+      for (const r of fetched) {
+        await addToHistory(r.job.url, r.title);
+        await updateJobStatus(r.job.id, 'done', '✅ Combined transcript saved');
+      }
       return;
     }
-    const providerLabel = provider === 'anthropic' ? 'Claude.ai'
-                        : provider === 'openai'    ? 'ChatGPT'
-                        : provider === 'gemini'    ? 'Gemini'
-                        : provider;
-    await chrome.downloads.download({
-      url: 'data:text/plain;charset=utf-8,' + encodeURIComponent(combinedContent),
-      filename: `combined_transcripts_${Date.now()}.txt`,
-      saveAs: false
-    });
-    const shouldPaste = settings.autoPaste || settings.autoSubmit;
-    if (shouldPaste) {
-      await chrome.storage.local.set({
-        pendingLLMContent: { text: combinedContent, autoSubmit: !!settings.autoSubmit }
-      });
-    }
-    await chrome.tabs.create({ url: webUrl, active: true });
-    const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
-                    : settings.autoPaste   ? `✅ Pasted into ${providerLabel}`
-                    :                        `✅ Opened ${providerLabel}`;
-    for (const r of fetched) {
-      await addToHistory(r.job.url, r.title);
-      await updateJobStatus(r.job.id, 'done', `${doneLabel} (combined)`);
-    }
-    return;
-  }
 
-  for (const r of fetched) await updateJobStatus(r.job.id, 'active', `🤖 Sending combined to ${settings.provider || 'anthropic'} API...`);
-  try {
-    const summary = await callLLM(combinedTranscript, settings);
+    if (mode === 'web') {
+      const provider = settings.provider || 'anthropic';
+      const webUrl = CONFIG.providerWebUrls[provider];
+      if (!webUrl) {
+        for (const r of fetched) await updateJobStatus(r.job.id, 'error', `❌ ${provider} does not support Web mode.`);
+        return;
+      }
+      const providerLabel = providerLabelOf(provider);
+      await downloadText(combinedContent, `combined_transcripts_${stamp}.txt`);
+      if (settings.autoPaste || settings.autoSubmit) {
+        await setPendingLLMContent(combinedContent, !!settings.autoSubmit);
+      }
+      await chrome.tabs.create({ url: webUrl, active: true });
+      const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
+                      : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
+                      :                       `✅ Opened ${providerLabel}`;
+      for (const r of fetched) {
+        await addToHistory(r.job.url, r.title);
+        await updateJobStatus(r.job.id, 'done', `${doneLabel} (combined)`);
+      }
+      return;
+    }
+
+    for (const r of fetched) await updateJobStatus(r.job.id, 'active', `🤖 Sending combined to ${settings.provider || 'anthropic'} API...`);
+    const llm = await callLLM(combinedTranscript, settings);
     const titles = fetched.map(r => r.title || r.videoId).join(' + ');
-    const mdContent = `# Combined Summary\n\n_Videos: ${titles}_\n\n${summary}`;
-    await chrome.downloads.download({
-      url: 'data:text/markdown;charset=utf-8,' + encodeURIComponent(mdContent),
-      filename: `combined_summary_${Date.now()}.md`,
-      saveAs: false
-    });
+    const note = llm.truncated
+      ? `> ⚠️ Combined transcript truncated to ${Math.round(llm.kept / 1000)}k of ${Math.round(llm.total / 1000)}k characters — the last videos may be missing.\n\n`
+      : '';
+    const mdContent = `# Combined Summary\n\n_Videos: ${titles}_\n\n${note}${llm.summary}`;
+    await downloadText(mdContent, `combined_summary_${stamp}.md`, 'text/markdown;charset=utf-8');
     for (const r of fetched) {
       await addToHistory(r.job.url, r.title);
-      await updateJobStatus(r.job.id, 'done', '✅ Combined summary saved');
+      await updateJobStatus(r.job.id, 'done', llm.truncated ? '✅ Combined summary saved (⚠️ truncated)' : '✅ Combined summary saved');
     }
   } catch (err) {
-    for (const r of fetched) await updateJobStatus(r.job.id, 'error', `❌ ${err.message.slice(0, 200)}`);
+    const msg = (err.message || String(err)).slice(0, 200);
+    for (const r of fetched) await updateJobStatus(r.job.id, 'error', `❌ ${msg}`);
   }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+// Serialize the read-modify-write of the shared jobs array: two overlapping
+// status updates (or one racing the popup) used to clobber each other.
+let jobWriteChain = Promise.resolve();
+
 async function updateJobStatus(jobId, status, statusText) {
-  const { jobs = [] } = await chrome.storage.local.get('jobs');
-  const job = jobs.find(j => j.id === jobId);
-  if (job) {
-    job.status = status;
-    job.statusText = statusText;
-    await chrome.storage.local.set({ jobs });
-  }
+  jobWriteChain = jobWriteChain.then(async () => {
+    const { jobs = [] } = await chrome.storage.local.get('jobs');
+    const job = jobs.find(j => j.id === jobId);
+    if (job) {
+      job.status = status;
+      job.statusText = statusText;
+      await chrome.storage.local.set({ jobs });
+    }
+  }).catch(e => console.warn('[YT Summarizer] job write failed:', e));
+  await jobWriteChain;
   safePost({ type: 'jobUpdate', jobId, status, statusText });
 }
 
@@ -526,23 +579,22 @@ function safePost(msg) {
   try { if (popupPort) popupPort.postMessage(msg); } catch (_) {}
 }
 
+const HISTORY_MAX = 500;
+
 async function addToHistory(url, title) {
   const { videoHistory = [] } = await chrome.storage.local.get('videoHistory');
   const idx = videoHistory.findIndex(e => e.url === url);
   const entry = { url, title: title || url, date: new Date().toISOString() };
-  if (idx !== -1) {
-    videoHistory[idx] = entry;
-  } else {
-    videoHistory.unshift(entry);
-  }
-  await chrome.storage.local.set({ videoHistory });
+  if (idx !== -1) videoHistory.splice(idx, 1);
+  videoHistory.unshift(entry);
+  await chrome.storage.local.set({ videoHistory: videoHistory.slice(0, HISTORY_MAX) });
 }
 
 // ── Playlist expansion ────────────────────────────────────────────────────────
 // Turn a playlist URL into the list of its video URLs by scraping the playlist
 // page's embedded ytInitialData, then following browse continuations for the
 // (100-at-a-time) rest. Capped to keep huge playlists from flooding the queue.
-const PLAYLIST_MAX = 500;
+const PLAYLIST_MAX = 5000;
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'expandPlaylist') {
@@ -650,6 +702,31 @@ function findContinuationToken(root) {
   return found;
 }
 
+// "1,234 videos" / "1.234 video" / "1.2K videos". A bare /\d+/ used to read
+// "1.2K videos" as 1, which then made a truncated import look complete.
+function parseVideoCount(text) {
+  const s = String(text || '');
+  const m = s.match(/([\d][\d.,\s]*)\s*([KMkm])?\s*(?:video|videos|filmati)\b/i);
+  if (!m) return NaN;
+  const digits = m[1].replace(/[.,\s]/g, '');
+  let n = parseInt(digits, 10);
+  if (!Number.isFinite(n)) return NaN;
+  if (m[2]) {
+    // Approximate counts ("1.2K") lose precision; reconstruct from the decimals.
+    const dec = m[1].match(/[.,](\d)\s*$/);
+    const base = dec ? parseInt(m[1].replace(/[.,]\d\s*$/, '').replace(/[.,\s]/g, ''), 10) + parseInt(dec[1], 10) / 10 : n;
+    n = Math.round(base * (m[2].toUpperCase() === 'K' ? 1000 : 1000000));
+  }
+  return n;
+}
+
+function textOf(v) {
+  if (v == null) return '';
+  if (Array.isArray(v)) return v.map(textOf).join(' ');
+  if (typeof v === 'string') return v;
+  return v.runs?.map(r => r.text).join('') || v.simpleText || v.content || '';
+}
+
 async function expandPlaylist(url) {
   let listId;
   try { listId = new URL(url).searchParams.get('list'); } catch { listId = null; }
@@ -689,20 +766,12 @@ async function expandPlaylist(url) {
         // The playlist's declared size. Different layouts expose it under
         // different keys (e.g. numVideosText = "26 videos"), so try each in turn,
         // then fall back to scraping the raw HTML for an "N videos" string.
-        const parseCount = (v) => {
-          const s = v?.runs?.map(r => r.text).join('') || v?.simpleText || v?.content || '';
-          const m = s.replace(/[.,](?=\d{3}\b)/g, '').match(/\d+/);
-          return m ? parseInt(m[0], 10) : NaN;
-        };
         let n = NaN;
         for (const key of ['numVideosText', 'videoCountText', 'videoCountShortText', 'stats']) {
-          n = parseCount(deepFind(data, key));
+          n = parseVideoCount(textOf(deepFind(data, key)));
           if (Number.isFinite(n)) break;
         }
-        if (!Number.isFinite(n)) {
-          const hm = html.match(/([\d.,]+)\s*videos?\b/i);
-          if (hm) n = parseInt(hm[1].replace(/[.,]/g, ''), 10);
-        }
+        if (!Number.isFinite(n)) n = parseVideoCount(html.match(/[\d][\d.,\s]*\s*[KMkm]?\s*videos?\b/i)?.[0]);
         if (Number.isFinite(n)) total = n;
         collectPlaylistVideos(data, videos, seen);
         const token = findContinuationToken(data);
@@ -746,10 +815,11 @@ async function expandPlaylist(url) {
   // (correctly) collapsed, so it isn't truncated.
   const allSeen = out.length + dupes >= total;
   const truncated = out.length < total && !allSeen;
+  const cappedAt = videos.length > PLAYLIST_MAX ? PLAYLIST_MAX : null;
   // A non-2xx continuation status means YouTube actively blocked a page. If every
   // fetch was fine and we simply ran out, the shortfall is unavailable videos
   // (private/deleted) that the playlist still counts in its total.
   const blocked = !!(contDbg?.statuses?.some(s => !/:2\d\d$/.test(String(s))));
   console.log(`[playlist] result: ${out.length}/${total} dupes=${dupes} truncated=${truncated} blocked=${blocked}`, contDbg || '(no continuation dbg)');
-  return { videos: out, count: out.length, total, dupes, truncated, blocked, contDbg };
+  return { videos: out, count: out.length, total, dupes, truncated, blocked, cappedAt, contDbg };
 }

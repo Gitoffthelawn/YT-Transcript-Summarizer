@@ -25,6 +25,30 @@ export const CONFIG = {
     anthropic:  'https://claude.ai/new',
     openai:     'https://chatgpt.com/',
     gemini:     'https://gemini.google.com/app',
+  },
+
+  transcript: {
+    // A caption track is accepted only if its last cue lands within this fraction
+    // of the video's real duration. YouTube sometimes serves a partial timedtext
+    // body (expired URL / partial PO-token enforcement); without this check a
+    // half-transcript would be summarized as if it were the whole video.
+    minCoverage: 0.80,
+    // Cue texts that are pure sound annotations and carry no speech. Only these
+    // are dropped — a blanket /^\[.*\]$/ filter also removed legitimate lines
+    // (stage directions, speaker labels) present in many manual caption tracks.
+    noiseCues: /^\[(music|musica|música|musique|musik|applause|applausi|aplausos|applaudissements|laughter|risate|risas|rires|silence|silenzio|no audio|sound effects?|[^\]]*\bmusic\b[^\]]*)\]$/i
+  },
+
+  // Per-provider transcript budget, in characters. The old flat 120k cap silently
+  // dropped the tail of any video longer than ~2 h even on 200k+ token models.
+  // Values leave generous room for the prompt and the response.
+  maxTranscriptChars: {
+    anthropic:  500000,   // 200k-token context
+    openai:     350000,   // 128k-token context
+    gemini:     900000,   // 1M-token context
+    openrouter: 300000,   // unknown model — conservative
+    custom:     200000,   // typically a small local model
+    default:    200000
   }
 };
 
@@ -43,12 +67,13 @@ export const PROVIDERS = {
   anthropic: {
     name: 'Anthropic Claude',
     models: [
-      { value: 'claude-sonnet-4-6',          label: 'claude-sonnet-4-6 (Recommended)' },
-      { value: 'claude-opus-4-7',             label: 'claude-opus-4-7 (Most capable)' },
-      { value: 'claude-3-7-sonnet-20250219',  label: 'claude-3-7-sonnet' },
-      { value: 'claude-3-5-sonnet-latest',    label: 'claude-3-5-sonnet' },
+      { value: 'claude-opus-4-8',   label: 'claude-opus-4-8 (Recommended)' },
+      { value: 'claude-sonnet-5',   label: 'claude-sonnet-5 (Fast + capable)' },
+      { value: 'claude-haiku-4-5',  label: 'claude-haiku-4-5 (Cheapest)' },
+      { value: 'claude-opus-4-7',   label: 'claude-opus-4-7' },
+      { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
     ],
-    defaultModel:      'claude-sonnet-4-6',
+    defaultModel:      'claude-opus-4-8',
     supportsThinking:  true,
     hasWebUI:          true,
     apiKeyLabel:       'API Key',

@@ -1,0 +1,150 @@
+// ── transcript-parse.js — timedtext parsing, one implementation ──────────────
+// Parsing used to be copy-pasted in four places (two in the service worker, two
+// inside the injected page script) and none of them checked that what came back
+// actually covered the whole video. Everything funnels through here now.
+
+import { CONFIG } from './config.js';
+
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeEntities(s) {
+  // Run twice: YouTube's XML tracks are double-escaped (`&amp;#39;`), so a
+  // single pass leaves a literal `&#39;` in the text.
+  const once = (t) => t.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, ent) => {
+    if (ent[0] === '#') {
+      const code = ent[1] === 'x' || ent[1] === 'X'
+        ? parseInt(ent.slice(2), 16)
+        : parseInt(ent.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : m;
+    }
+    const named = HTML_ENTITIES[ent.toLowerCase()];
+    return named !== undefined ? named : m;
+  });
+  return once(once(s));
+}
+
+function isNoise(line) {
+  return CONFIG.transcript.noiseCues.test(line);
+}
+
+// Auto-generated tracks emit a rolling window: the same words are re-sent in the
+// following cue so the on-screen caption can grow. Joining them verbatim used to
+// duplicate large parts of the text; drop a cue that only repeats the previous one.
+function pushCue(lines, text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (!t || isNoise(t)) return;
+  const prev = lines[lines.length - 1];
+  if (prev === t) return;
+  if (prev && (prev.endsWith(t) || t.startsWith(prev)) && Math.abs(prev.length - t.length) < 3) {
+    lines[lines.length - 1] = t.length >= prev.length ? t : prev;
+    return;
+  }
+  lines.push(t);
+}
+
+function parseJson3(text) {
+  const json = JSON.parse(text); // caller catches
+  const events = Array.isArray(json?.events) ? json.events : [];
+  if (!events.length) return null;
+  const lines = [];
+  let endMs = 0;
+  for (const e of events) {
+    if (!Array.isArray(e.segs)) continue;
+    const start = Number(e.tStartMs) || 0;
+    const dur = Number(e.dDurationMs) || 0;
+    endMs = Math.max(endMs, start + dur);
+    pushCue(lines, e.segs.map(s => s.utf8 || '').join(''));
+  }
+  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+}
+
+// Legacy `?lang=xx` (no fmt) format: <text start="12.3" dur="4.5">…</text>
+function parseLegacyXml(text) {
+  const matches = [...text.matchAll(/<text([^>]*)>([\s\S]*?)<\/text>/g)];
+  if (!matches.length) return null;
+  const lines = [];
+  let endMs = 0;
+  for (const m of matches) {
+    const start = parseFloat(/\bstart="([\d.]+)"/.exec(m[1])?.[1] ?? '0') || 0;
+    const dur = parseFloat(/\bdur="([\d.]+)"/.exec(m[1])?.[1] ?? '0') || 0;
+    endMs = Math.max(endMs, (start + dur) * 1000);
+    pushCue(lines, decodeEntities(m[2].replace(/<[^>]+>/g, '')));
+  }
+  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+}
+
+// srv3: <p t="12300" d="4500"><s>word</s><s> more</s></p>. The old code looked
+// for <text> tags here too, so the srv3 fallback could never match anything and
+// was effectively dead — the strategy silently had two attempts, not three.
+function parseSrv3(text) {
+  const paragraphs = [...text.matchAll(/<p([^>]*)>([\s\S]*?)<\/p>/g)];
+  if (!paragraphs.length) return null;
+  const lines = [];
+  let endMs = 0;
+  for (const p of paragraphs) {
+    const t = parseInt(/\bt="(\d+)"/.exec(p[1])?.[1] ?? '0', 10) || 0;
+    const d = parseInt(/\bd="(\d+)"/.exec(p[1])?.[1] ?? '0', 10) || 0;
+    endMs = Math.max(endMs, t + d);
+    const inner = p[2];
+    const segs = [...inner.matchAll(/<s[^>]*>([\s\S]*?)<\/s>/g)];
+    const raw = segs.length ? segs.map(s => s[1]).join('') : inner.replace(/<[^>]+>/g, '');
+    pushCue(lines, decodeEntities(raw));
+  }
+  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+}
+
+/**
+ * Parse any timedtext payload.
+ * @returns {{text: string, endMs: number, cues: number}|null}
+ */
+export function parseTranscript(body) {
+  if (typeof body !== 'string' || body.length < 10) return null;
+  const trimmed = body.trimStart();
+
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const r = parseJson3(body);
+      if (r) return r;
+    } catch (_) { /* not json3 — fall through to the XML parsers */ }
+  }
+  return parseSrv3(body) || parseLegacyXml(body);
+}
+
+/**
+ * How much of the video the parsed cues actually span.
+ * `lengthSeconds` comes from videoDetails; when it is unknown we cannot judge,
+ * so coverage is reported as `null` and the caller accepts the result.
+ */
+export function coverageOf(parsed, lengthSeconds) {
+  const total = Number(lengthSeconds);
+  if (!parsed || !Number.isFinite(total) || total <= 0) return null;
+  return Math.min(1, (parsed.endMs / 1000) / total);
+}
+
+export function isComplete(parsed, lengthSeconds) {
+  const cov = coverageOf(parsed, lengthSeconds);
+  // Very short clips have too little signal for the ratio to mean anything.
+  if (cov === null || Number(lengthSeconds) < 30) return true;
+  return cov >= CONFIG.transcript.minCoverage;
+}
+
+export function coverageLabel(parsed, lengthSeconds) {
+  const cov = coverageOf(parsed, lengthSeconds);
+  return cov === null ? 'unknown' : `${Math.round(cov * 100)}%`;
+}
+
+/**
+ * Plausibility check for transcripts that carry no timings at all (the
+ * get_transcript endpoint returns plain cue text). Without this an obviously
+ * truncated response counted as "complete" and short-circuited the remaining
+ * strategies. Continuous speech runs ~12–18 chars/s; 4 chars/s is low enough
+ * that only a genuinely truncated result — or a video that is mostly silence —
+ * trips it, and a false positive merely costs one extra strategy attempt.
+ */
+const MIN_CHARS_PER_SECOND = 4;
+
+export function looksTruncated(text, lengthSeconds) {
+  const total = Number(lengthSeconds);
+  if (!Number.isFinite(total) || total < 120) return false; // too short to judge
+  return String(text || '').length < total * MIN_CHARS_PER_SECOND;
+}

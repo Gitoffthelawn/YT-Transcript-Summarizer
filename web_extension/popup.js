@@ -10,6 +10,25 @@ const PANELS = ['panel-settings', 'panel-history', 'panel-tts'];
 
 let countdownInterval = null;
 
+// `Date.now() + i` handed out ids in a contiguous block (500 of them when
+// importing a playlist), so any job added in the next half second collided with
+// one already in the queue — and every lookup is by id: the wrong row was
+// updated, and removing one job deleted two.
+let idSeq = 0;
+function newJobId() {
+  let id = Date.now() * 1000 + (idSeq++ % 1000);
+  while (state.jobs.some(j => j.id === id)) id++;
+  return id;
+}
+
+function makeJob(url, title = null) {
+  return {
+    id: newJobId(), url, title,
+    status: 'queued', statusText: 'Queued',
+    prompt: null, format: null, length: null
+  };
+}
+
 async function updateApiKeyWarning() {
   const mode = document.getElementById('mode-select').value;
   const provider = document.getElementById('provider-select').value;
@@ -97,8 +116,8 @@ async function init() {
     if (nextJobAt && nextJobAt > Date.now()) startCountdown(nextJobAt);
   }
 
-  if (!savedRunning && state.jobs.some(j => j.status === 'done')) {
-    state.jobs = state.jobs.filter(j => j.status !== 'done');
+  if (!savedRunning && state.jobs.some(j => j.status === 'done' || j.cleared)) {
+    state.jobs = state.jobs.filter(j => j.status !== 'done' && !j.cleared);
     chrome.storage.local.set({ jobs: state.jobs });
   }
 
@@ -391,9 +410,13 @@ function connectPort() {
       } else if (msg.type === 'batchDone') {
         stopCountdown();
         state.running = false;
-        chrome.storage.local.set({ running: false });
+        // The background just pruned the faded-out jobs; re-read instead of
+        // writing our stale copy back over its result.
+        chrome.storage.local.get('jobs').then(({ jobs = [] }) => {
+          state.jobs = jobs;
+          renderJobs();
+        });
         setUIAsStopped();
-        renderJobs();
         const s = msg.summary;
         if (s && (s.noTranscript || s.failed)) {
           const bits = [`${s.done} done`];
@@ -464,19 +487,19 @@ function loadTitle(jobId, url) {
 async function enqueueUrls(items) {
   let added = 0, requeued = 0;
   const fresh = [];
-  items.forEach((item, i) => {
+  items.forEach((item) => {
     const url = typeof item === 'string' ? item : item.url;
     const title = typeof item === 'string' ? null : (item.title || null);
-    const existing = state.jobs.find(j => j.url === url);
+    const existing = state.jobs.find(j => j.url === url && !j.cleared);
     if (existing) {
-      if (existing.status === 'error') {
+      if (existing.status === 'error' || existing.status === 'unavailable') {
         existing.status = 'queued';
         existing.statusText = 'Queued';
         requeued++;
       }
       return;
     }
-    const job = { id: Date.now() + i, url, title, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
+    const job = makeJob(url, title);
     state.jobs.push(job);
     fresh.push(job);
     added++;
@@ -508,7 +531,7 @@ function playlistInfo(url) {
 // leaving plain video URLs untouched. Returns { items, playlistVideos, errors }.
 async function resolvePlaylists(tokens) {
   const items = [];
-  let playlistVideos = 0, playlistTotal = 0, playlistDupes = 0, errors = 0, truncated = false, blocked = false;
+  let playlistVideos = 0, playlistTotal = 0, playlistDupes = 0, errors = 0, truncated = false, blocked = false, capped = false;
   for (const url of tokens) {
     const pl = playlistInfo(url);
     if (!pl) { items.push(url); continue; }
@@ -528,6 +551,7 @@ async function resolvePlaylists(tokens) {
       playlistVideos += vids.length;
       playlistTotal += declared;
       playlistDupes += (res?.dupes || 0);
+      if (res?.cappedAt) capped = true;
       if (res?.truncated) {
         truncated = true;
         if (res?.blocked) blocked = true;
@@ -540,11 +564,14 @@ async function resolvePlaylists(tokens) {
       showMsg(`Playlist expansion failed: ${e.message || e}`, 'error');
     }
   }
-  return { items, playlistVideos, playlistTotal, playlistDupes, errors, truncated, blocked };
+  return { items, playlistVideos, playlistTotal, playlistDupes, errors, truncated, blocked, capped };
 }
 
 // Build the persistent top banner text for a playlist import.
-function playlistBanner(imported, total, dupes, truncated, blocked) {
+function playlistBanner(imported, total, dupes, truncated, blocked, capped) {
+  if (capped) {
+    return { text: `⚠️ Imported the first ${imported} of ${total} videos — per-playlist import limit`, type: 'warn' };
+  }
   if (!truncated || total <= imported) {
     // Loaded everything. If the playlist lists more entries than unique videos,
     // the extras are repeats we collapsed — explain the number, don't alarm.
@@ -567,7 +594,7 @@ async function addUrl() {
     return;
   }
   input.value = '';
-  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked } = await resolvePlaylists(tokens);
+  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked, capped } = await resolvePlaylists(tokens);
   if (items.length === 0) return;
   const { added, requeued } = await enqueueUrls(items);
   if (playlistVideos) {
@@ -576,7 +603,7 @@ async function addUrl() {
       ? `${playlistVideos} of ${playlistTotal} from playlist`
       : `${playlistVideos} from playlist`;
     showMsg(`✅ ${added} added${requeued ? `, ${requeued} re-queued` : ''} (${fromPlaylist})`, 'ok');
-    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked);
+    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked, capped);
     showBanner(b.text, b.type);
   } else if (added + requeued === 0) {
     showMsg('Already in the queue.', 'warn');
@@ -590,7 +617,7 @@ async function bulkAddUrls() {
     showMsg('No valid YouTube links found.', 'error');
     return;
   }
-  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked } = await resolvePlaylists(tokens);
+  const { items, playlistVideos, playlistTotal, playlistDupes, truncated, blocked, capped } = await resolvePlaylists(tokens);
   if (items.length === 0) { showMsg('No videos found.', 'error'); return; }
   const { added, requeued } = await enqueueUrls(items);
   ta.value = '';
@@ -606,7 +633,7 @@ async function bulkAddUrls() {
   }
   showMsg(parts.length ? `✅ ${parts.join(', ')}` : 'All links already in the queue.', parts.length ? 'ok' : 'warn');
   if (playlistVideos) {
-    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked);
+    const b = playlistBanner(playlistVideos, playlistTotal, playlistDupes, truncated, blocked, capped);
     showBanner(b.text, b.type);
   }
 }
@@ -637,7 +664,7 @@ async function addCurrentTab() {
     return;
   }
   const cleanTitle = tab.title ? tab.title.replace(/ - YouTube$/, '').trim() : null;
-  state.jobs.push({ id: Date.now(), url: tab.url, title: cleanTitle || null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null });
+  state.jobs.push(makeJob(tab.url, cleanTitle || null));
   await chrome.storage.local.set({ jobs: state.jobs });
   renderJobs();
 }
@@ -670,7 +697,7 @@ async function startBatch() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && (tab.url.includes('youtube.com/watch') || tab.url.includes('youtu.be/') || tab.url.includes('youtube.com/shorts/'))) {
       const cleanTitle = tab.title ? tab.title.replace(/ - YouTube$/, '').trim() : null;
-      const newJob = { id: Date.now(), url: tab.url, title: cleanTitle || null, status: 'queued', statusText: 'Queued', prompt: null, format: null, length: null };
+      const newJob = makeJob(tab.url, cleanTitle || null);
       state.jobs.push(newJob);
       await chrome.storage.local.set({ jobs: state.jobs });
       renderJobs();
@@ -718,6 +745,20 @@ async function startBatch() {
     return;
   }
 
+  // A custom endpoint on an arbitrary host isn't covered by host_permissions, so
+  // the fetch would die with an opaque CORS failure. Ask for the host up front.
+  if (currentMode === 'api' && provider === 'custom') {
+    if (!customEndpointUrl) {
+      showMsg('Custom provider: set the endpoint URL in Advanced Settings (⚙️) first.', 'error');
+      openPanel('panel-settings');
+      return;
+    }
+    if (!await ensureHostPermission(customEndpointUrl)) {
+      showMsg('Permission for the custom endpoint host was denied — cannot call it.', 'error');
+      return;
+    }
+  }
+
   state.running = true;
   await chrome.storage.local.set({ running: true });
   setUIAsRunning();
@@ -753,6 +794,19 @@ async function startBatch() {
   });
 }
 
+// Request the optional host permission for an arbitrary endpoint. Must be called
+// from a user gesture, which is why it lives on the Start click path.
+async function ensureHostPermission(endpointUrl) {
+  let origin;
+  try { origin = new URL(endpointUrl).origin + '/*'; } catch { return false; }
+  try {
+    if (await chrome.permissions.contains({ origins: [origin] })) return true;
+    return await chrome.permissions.request({ origins: [origin] });
+  } catch (_) {
+    return true; // Firefox/older builds: let the request itself fail loudly instead
+  }
+}
+
 async function fetchVideoTitle(url) {
   try {
     const controller = new AbortController();
@@ -770,10 +824,10 @@ async function fetchVideoTitle(url) {
 
 async function resetBatch() {
   stopCountdown();
-  state.jobs = state.jobs.map(j =>
-    j.status === 'active' ? { ...j, status: 'error', statusText: '❌ Interrupted' } : j
-  );
-  await chrome.storage.local.set({ jobs: state.jobs, running: false, nextJobAt: null, nextJobFromIndex: null });
+  state.jobs = state.jobs
+    .filter(j => !j.cleared)
+    .map(j => j.status === 'active' ? { ...j, status: 'error', statusText: '❌ Interrupted' } : j);
+  await chrome.storage.local.set({ jobs: state.jobs, running: false, nextJobAt: null, nextJobId: null });
 
   const p = ensurePort();
   if (p) { try { p.postMessage({ type: 'resetState' }); } catch (_) {} }
