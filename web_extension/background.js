@@ -1,5 +1,5 @@
 // ── background.js — Service Worker ───────────────────────────────────────────
-import { callLLM } from './modules/llm-api.js';
+import { callLLM, splitTranscript, plannedChunkCount, chunkPrompt, chunkHeading, mergeApiPrompt, buildChunkMessages } from './modules/llm-api.js';
 import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript, tabBrowseContinuations } from './modules/youtube-api.js';
 import { CONFIG } from './modules/config.js';
 import { sleep, fetchWithTimeout } from './modules/utils.js';
@@ -345,21 +345,25 @@ async function processJob(job, settings) {
 
       const providerLabel = providerLabelOf(provider);
       await updateJobStatus(job.id, 'active', `🌐 Opening ${providerLabel}...`);
-      const webContent = `${effectivePrompt}\n\n---\n\n${transcript}`;
+      // A split transcript becomes several messages posted one after another
+      // into the same conversation (see paste_common.js), so the model still
+      // sees the whole video without any single message being enormous.
+      const web = buildChunkMessages(transcript, { ...settings, prompt: effectivePrompt });
 
       if (settings.saveTranscriptFile) {
-        await downloadText(webContent, safeFilename(displayTitle, videoId, { suffix: '_transcript', ext: 'txt' }));
+        await saveWebParts(web.parts, displayTitle, videoId);
       }
       if (settings.autoPaste || settings.autoSubmit) {
-        await setPendingLLMContent(webContent, !!settings.autoSubmit);
+        await setPendingLLMContent(web.parts, !!settings.autoSubmit);
       }
       await chrome.tabs.create({ url: webUrl, active: true });
 
       const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
                       : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
                       :                       `✅ Opened ${providerLabel} (transcript saved)`;
+      const splitNote = webSplitNote(web, settings);
       await addToHistory(job.url, displayTitle);
-      await updateJobStatus(job.id, 'done', `${doneLabel}${warn}: ${displayTitle.slice(0, 35)}`);
+      await updateJobStatus(job.id, 'done', `${doneLabel}${splitNote}${warn}: ${displayTitle.slice(0, 35)}`);
       return;
     }
 
@@ -369,7 +373,7 @@ async function processJob(job, settings) {
 
     let llm;
     try {
-      llm = await callLLMWithRetries(transcript, { ...settings, prompt: effectivePrompt }, job.id, (m) => { debugLog += m; });
+      llm = await summarizeTranscript(transcript, { ...settings, prompt: effectivePrompt }, job.id, (m) => { debugLog += m; }, `🤖 ${providerName}`);
     } catch (llmErr) {
       // Keep the per-video debug dump the API path has always produced, but
       // never let a failed dump replace the real error message.
@@ -382,6 +386,12 @@ async function processJob(job, settings) {
     }
     if (llm.truncated) {
       notes.push(`⚠️ Transcript truncated to ${Math.round(llm.kept / 1000)}k of ${Math.round(llm.total / 1000)}k characters to fit the model's context — the summary does not cover the end of the video.`);
+    }
+    if (llm.chunks > 1) {
+      notes.push(llm.merged
+        ? `✂️ The transcript was split into ${llm.chunks} parts and the partial summaries were merged in a final API call.`
+        : `✂️ The transcript was split into ${llm.chunks} parts, each summarized in a separate API call.`);
+      if (llm.mergeError) notes.push(`⚠️ The final merge call failed (${llm.mergeError}) — the partial summaries are shown as-is.`);
     }
 
     const banner = notes.length ? `> ${notes.join('\n> ')}\n\n` : '';
@@ -415,10 +425,90 @@ function providerLabelOf(provider) {
 // transcript if the page was slow or the user was logged out) and kept it
 // forever otherwise, so an unrelated visit to claude.ai days later got a
 // surprise paste.
-async function setPendingLLMContent(text, autoSubmit) {
+async function setPendingLLMContent(parts, autoSubmit) {
+  const list = Array.isArray(parts) ? parts : [parts];
   await chrome.storage.local.set({
-    pendingLLMContent: { text, autoSubmit, ts: Date.now() }
+    // `text` stays for the single-message case so nothing else has to care.
+    pendingLLMContent: { parts: list, text: list[0], autoSubmit, ts: Date.now() }
   });
+}
+
+// One .txt per message when the transcript was split, so the user can paste the
+// remaining parts by hand if auto-submit is off (or a page misbehaves).
+async function saveWebParts(parts, displayTitle, videoId) {
+  if (parts.length === 1) {
+    await downloadText(parts[0], safeFilename(displayTitle, videoId, { suffix: '_transcript', ext: 'txt' }));
+    return;
+  }
+  for (let i = 0; i < parts.length; i++) {
+    await downloadText(parts[i], safeFilename(displayTitle, videoId, { suffix: `_transcript_part${i + 1}of${parts.length}`, ext: 'txt' }));
+  }
+}
+
+// Web mode can't send the follow-up parts unless it is allowed to press Send —
+// say so in the status line instead of silently dropping most of the video.
+function webSplitNote(web, settings) {
+  if (web.chunks <= 1) return '';
+  if (!settings.autoSubmit) return ` (✂️ ${web.chunks} parts — auto-submit off, only part 1 pasted)`;
+  return web.merged ? ` (✂️ ${web.chunks} parts + merge)` : ` (✂️ ${web.chunks} parts)`;
+}
+
+/**
+ * One summary out of a transcript, sent either in a single call or — when the
+ * user asked for it in Advanced Settings and the transcript is long enough —
+ * split into N sequential calls whose partial summaries are concatenated.
+ *
+ * The split lives here rather than inside callLLM so every chunk gets its own
+ * rate-limit retries and its own cancellation check: a 429 on part 3 must not
+ * re-send (and re-bill) parts 1 and 2.
+ *
+ * @returns {Promise<{summary: string, truncated: boolean, kept: number, total: number, chunks: number}>}
+ */
+async function summarizeTranscript(transcript, settings, jobId, appendLog, label = '🤖') {
+  const chunks = plannedChunkCount(transcript, settings);
+  if (chunks === 1) {
+    const llm = await callLLMWithRetries(transcript, settings, jobId, appendLog);
+    return { ...llm, chunks: 1, merged: false };
+  }
+
+  const lang = settings.transcriptLang || 'en';
+  const parts = splitTranscript(transcript, chunks);
+  const n = parts.length;
+  appendLog(`\n✂️ Split into ${n} parts (${parts.map(p => Math.round(p.length / 1000) + 'k').join(' + ')} chars)\n`);
+
+  const pieces = [];
+  let truncated = false, kept = 0, total = 0;
+
+  for (let i = 0; i < n; i++) {
+    if (await batchCancelled()) throw new Error('Interrupted by user');
+    await updateJobStatus(jobId, 'active', `${label} Part ${i + 1}/${n} — ${(parts[i].length / 1000).toFixed(1)}k chars...`);
+    const llm = await callLLMWithRetries(parts[i], { ...settings, prompt: chunkPrompt(settings.prompt, i + 1, n, lang) }, jobId, appendLog);
+    pieces.push(`${chunkHeading(i + 1, n, lang)}\n\n${llm.summary.trim()}`);
+    truncated = truncated || llm.truncated;
+    kept += llm.kept;
+    total += llm.total;
+    // A short pause between parts: N back-to-back calls on the same key is the
+    // fastest way to trip a per-minute rate limit.
+    if (i < n - 1 && await cancellableSleep(1500)) throw new Error('Interrupted by user');
+  }
+
+  const joined = pieces.join('\n\n');
+  if (!settings.chunkMerge) return { summary: joined, truncated, kept, total, chunks: n, merged: false };
+
+  // Optional extra call: fuse the partials into one summary. If it fails there
+  // is no reason to throw away N successful calls — keep the joined parts.
+  if (await batchCancelled()) throw new Error('Interrupted by user');
+  await updateJobStatus(jobId, 'active', `${label} Merging ${n} parts...`);
+  try {
+    if (await cancellableSleep(1500)) throw new Error('Interrupted by user');
+    const lang = settings.transcriptLang || 'en';
+    const merge = await callLLMWithRetries(joined, { ...settings, prompt: mergeApiPrompt(settings.prompt, n, lang) }, jobId, appendLog);
+    return { summary: merge.summary, truncated, kept, total, chunks: n, merged: true };
+  } catch (e) {
+    if (/Interrupted by user/.test(e.message || '')) throw e;
+    appendLog(`\n⚠️ Merge pass failed (${e.message}) — keeping the ${n} partial summaries.\n`);
+    return { summary: joined, truncated, kept, total, chunks: n, merged: false, mergeError: e.message };
+  }
 }
 
 async function callLLMWithRetries(transcript, settings, jobId, appendLog) {
@@ -523,33 +613,40 @@ async function runBatchCombined(jobs, settings) {
         return;
       }
       const providerLabel = providerLabelOf(provider);
+      const web = buildChunkMessages(combinedTranscript, settings);
       await downloadText(combinedContent, `combined_transcripts_${stamp}.txt`);
       if (settings.autoPaste || settings.autoSubmit) {
-        await setPendingLLMContent(combinedContent, !!settings.autoSubmit);
+        await setPendingLLMContent(web.parts, !!settings.autoSubmit);
       }
       await chrome.tabs.create({ url: webUrl, active: true });
       const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
                       : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
                       :                       `✅ Opened ${providerLabel}`;
-      for (const r of fetched) {
-        await addToHistory(r.job.url, r.title);
-        await updateJobStatus(r.job.id, 'done', `${doneLabel} (combined)`);
-      }
+      const splitNote = webSplitNote(web, settings);
+      for (const r of fetched) await addToHistory(r.job.url, r.title);
+      await updateJobStatus(fetched.map(r => r.job.id), 'done', `${doneLabel} (combined)${splitNote}`);
       return;
     }
 
-    for (const r of fetched) await updateJobStatus(r.job.id, 'active', `🤖 Sending combined to ${settings.provider || 'anthropic'} API...`);
-    const llm = await callLLM(combinedTranscript, settings);
+    const ids = fetched.map(r => r.job.id);
+    await updateJobStatus(ids, 'active', `🤖 Sending combined to ${settings.provider || 'anthropic'} API...`);
+    const llm = await summarizeTranscript(combinedTranscript, settings, ids, (m) => console.log('[combined]', m), '🤖 Combined');
     const titles = fetched.map(r => r.title || r.videoId).join(' + ');
-    const note = llm.truncated
-      ? `> ⚠️ Combined transcript truncated to ${Math.round(llm.kept / 1000)}k of ${Math.round(llm.total / 1000)}k characters — the last videos may be missing.\n\n`
-      : '';
+    const notes = [];
+    if (llm.truncated) {
+      notes.push(`> ⚠️ Combined transcript truncated to ${Math.round(llm.kept / 1000)}k of ${Math.round(llm.total / 1000)}k characters — the last videos may be missing.`);
+    }
+    if (llm.chunks > 1) {
+      notes.push(llm.merged
+        ? `> ✂️ The combined transcript was split into ${llm.chunks} parts and the partial summaries were merged in a final API call.`
+        : `> ✂️ The combined transcript was split into ${llm.chunks} parts, each summarized in a separate API call.`);
+      if (llm.mergeError) notes.push(`> ⚠️ The final merge call failed (${llm.mergeError}) — the partial summaries are shown as-is.`);
+    }
+    const note = notes.length ? notes.join('\n') + '\n\n' : '';
     const mdContent = `# Combined Summary\n\n_Videos: ${titles}_\n\n${note}${llm.summary}`;
     await downloadText(mdContent, `combined_summary_${stamp}.md`, 'text/markdown;charset=utf-8');
-    for (const r of fetched) {
-      await addToHistory(r.job.url, r.title);
-      await updateJobStatus(r.job.id, 'done', llm.truncated ? '✅ Combined summary saved (⚠️ truncated)' : '✅ Combined summary saved');
-    }
+    for (const r of fetched) await addToHistory(r.job.url, r.title);
+    await updateJobStatus(ids, 'done', llm.truncated ? '✅ Combined summary saved (⚠️ truncated)' : '✅ Combined summary saved');
   } catch (err) {
     const msg = (err.message || String(err)).slice(0, 200);
     for (const r of fetched) await updateJobStatus(r.job.id, 'error', `❌ ${msg}`);
@@ -561,18 +658,25 @@ async function runBatchCombined(jobs, settings) {
 // status updates (or one racing the popup) used to clobber each other.
 let jobWriteChain = Promise.resolve();
 
+// `jobId` may also be an array: combined mode drives several queue entries from
+// a single API call and they must all show the same progress.
 async function updateJobStatus(jobId, status, statusText) {
+  const ids = Array.isArray(jobId) ? jobId : [jobId];
   jobWriteChain = jobWriteChain.then(async () => {
     const { jobs = [] } = await chrome.storage.local.get('jobs');
-    const job = jobs.find(j => j.id === jobId);
-    if (job) {
-      job.status = status;
-      job.statusText = statusText;
-      await chrome.storage.local.set({ jobs });
+    let dirty = false;
+    for (const id of ids) {
+      const job = jobs.find(j => j.id === id);
+      if (job) {
+        job.status = status;
+        job.statusText = statusText;
+        dirty = true;
+      }
     }
+    if (dirty) await chrome.storage.local.set({ jobs });
   }).catch(e => console.warn('[YT Summarizer] job write failed:', e));
   await jobWriteChain;
-  safePost({ type: 'jobUpdate', jobId, status, statusText });
+  for (const id of ids) safePost({ type: 'jobUpdate', jobId: id, status, statusText });
 }
 
 function safePost(msg) {

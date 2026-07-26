@@ -1,4 +1,4 @@
-import { PROVIDERS, getPreset, isPreset } from './modules/config.js';
+import { CONFIG, PROVIDERS, getPreset, isPreset } from './modules/config.js';
 import { showMsg, showBanner } from './modules/ui-utils.js';
 import { state } from './modules/popup-state.js';
 import { renderHistory, clearHistory } from './modules/popup-history.js';
@@ -86,14 +86,16 @@ async function init() {
     'transcriptLang', 'customPrompt', 'mode',
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile',
     'outputFormat', 'summaryLength', 'jobs', 'running', 'theme',
-    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay', 'ttsLocalUrl'
+    'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay', 'ttsLocalUrl',
+    'chunkParts', 'chunkMinChars', 'chunkMerge'
   ]);
 
   const {
     transcriptLang, customPrompt, mode,
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile,
     outputFormat, summaryLength, jobs: savedJobs, running: savedRunning, theme,
-    ttsState, ttsRate, ttsVoice, ttsText, webDelay, ttsLocalUrl
+    ttsState, ttsRate, ttsVoice, ttsText, webDelay, ttsLocalUrl,
+    chunkParts, chunkMinChars, chunkMerge
   } = stored;
 
   // Migrate legacy apiKey → apiKeys.anthropic
@@ -131,6 +133,10 @@ async function init() {
   if (ttsState) updateTTSStatus(ttsState);
   if (ttsLocalUrl) document.getElementById('tts-local-url').value = ttsLocalUrl;
   document.getElementById('web-delay').value = webDelay ?? 30;
+  document.getElementById('chunk-parts').value = chunkParts ?? CONFIG.chunking.defaultParts;
+  document.getElementById('chunk-min-chars').value =
+    Math.round((chunkMinChars ?? CONFIG.chunking.defaultMinChars) / 1000);
+  document.getElementById('chunk-merge-cb').checked = !!chunkMerge;
 
   if (transcriptLang) {
     document.getElementById('transcript-lang-select').value = transcriptLang;
@@ -716,10 +722,12 @@ async function startBatch() {
   await persistSettings();
   const {
     models = {}, customEndpointUrl, transcriptLang, customPrompt, mode,
-    useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, webDelay: storedDelay
+    useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, webDelay: storedDelay,
+    chunkParts, chunkMinChars, chunkMerge
   } = await chrome.storage.local.get([
     'models', 'customEndpointUrl', 'transcriptLang', 'customPrompt', 'mode',
-    'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile', 'webDelay'
+    'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile', 'webDelay',
+    'chunkParts', 'chunkMinChars', 'chunkMerge'
   ]);
 
   const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
@@ -789,7 +797,10 @@ async function startBatch() {
       autoSubmit: !!autoSubmit,
       combinedPrompt: !!combinedPrompt,
       saveTranscriptFile: !!saveTranscriptFile,
-      webDelay: storedDelay ?? 30
+      webDelay: storedDelay ?? 30,
+      chunkParts: chunkParts ?? CONFIG.chunking.defaultParts,
+      chunkMinChars: chunkMinChars ?? CONFIG.chunking.defaultMinChars,
+      chunkMerge: !!chunkMerge
     }
   });
 }

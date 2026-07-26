@@ -1,5 +1,5 @@
 import { state } from './popup-state.js';
-import { PROVIDERS, getPreset } from './config.js';
+import { CONFIG, PROVIDERS } from './config.js';
 import { escHtml } from './ui-utils.js';
 import { setMode, updateChipsForMode } from './popup-render.js';
 
@@ -46,6 +46,10 @@ export async function applyProvider(provider, apiKeys = {}, models = {}, customE
   updateChipsForMode(document.getElementById('mode-select').value);
 }
 
+function clamp(n, lo, hi) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
 export async function persistSettings() {
   const provider = document.getElementById('provider-select').value;
   const isCustom = provider === 'custom';
@@ -62,6 +66,11 @@ export async function persistSettings() {
   const saveTranscriptFile = document.getElementById('save-file-cb').checked;
   const summaryLength     = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
   const webDelay          = Math.max(10, parseInt(document.getElementById('web-delay').value, 10) || 30);
+  // Stored in characters (what llm-api reasons about), edited in thousands.
+  const chunkParts        = clamp(parseInt(document.getElementById('chunk-parts').value, 10) || 1, 1, CONFIG.chunking.maxParts);
+  const chunkMinCharsK    = clamp(parseInt(document.getElementById('chunk-min-chars').value, 10) || 100, 1, 2000);
+  const chunkMinChars     = chunkMinCharsK * 1000;
+  const chunkMerge        = document.getElementById('chunk-merge-cb').checked;
 
   const { apiKeys: storedKeys = {}, models: storedModels = {} } =
     await chrome.storage.local.get(['apiKeys', 'models']);
@@ -73,7 +82,8 @@ export async function persistSettings() {
     provider, apiKeys: newApiKeys, models: newModels, customEndpointUrl,
     apiKey: provider === 'anthropic' ? apiKey : (storedKeys.anthropic || ''),
     model:  provider === 'anthropic' ? model  : (storedModels.anthropic || 'claude-sonnet-4-6'),
-    transcriptLang, customPrompt, mode, useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, summaryLength, webDelay
+    transcriptLang, customPrompt, mode, useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, summaryLength, webDelay,
+    chunkParts, chunkMinChars, chunkMerge
   });
 }
 

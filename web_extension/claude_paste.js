@@ -16,4 +16,11 @@ ytsRunPaste({
     'button[data-testid*="submit"]',
     'button[type="submit"]',
   ],
+  // Shown while Claude is answering; used to pace a multi-part transcript.
+  stopSelectors: [
+    'button[aria-label*="Stop"]',
+    'button[aria-label*="stop"]',
+    'button[aria-label*="Interrompi"]',
+    'button[data-testid="stop-button"]',
+  ],
 });

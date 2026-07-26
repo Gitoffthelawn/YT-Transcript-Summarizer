@@ -18,7 +18,12 @@ function ytsSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
  */
 async function ytsClaimPending() {
   const { pendingLLMContent } = await chrome.storage.local.get('pendingLLMContent');
-  if (!pendingLLMContent?.text) return null;
+  // `parts` is the split-transcript form (one message per part, plus an optional
+  // merge request); `text` is the single-message form.
+  const parts = Array.isArray(pendingLLMContent?.parts) && pendingLLMContent.parts.length
+    ? pendingLLMContent.parts
+    : (pendingLLMContent?.text ? [pendingLLMContent.text] : null);
+  if (!parts) return null;
 
   if (pendingLLMContent.ts && Date.now() - pendingLLMContent.ts > PENDING_TTL_MS) {
     await chrome.storage.local.remove('pendingLLMContent');
@@ -35,7 +40,7 @@ async function ytsClaimPending() {
   // Re-read: if another tab claimed it in the meantime, its token wins.
   const { pendingLLMContent: after } = await chrome.storage.local.get('pendingLLMContent');
   if (after?.claimedBy !== token) return null;
-  return { text: after.text, autoSubmit: after.autoSubmit };
+  return { parts, autoSubmit: after.autoSubmit };
 }
 
 async function ytsReleasePending(consumed) {
@@ -108,6 +113,32 @@ function ytsInputHasText(el, text) {
   return current.length > 20 && (!probe || current.includes(probe.slice(0, 20)));
 }
 
+// `offsetParent` is null for position:fixed elements, which is exactly what the
+// floating "stop generating" button often is.
+function ytsIsVisible(el) {
+  return !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
+}
+
+/**
+ * Block until the assistant has finished answering, so the next part isn't
+ * typed into a busy composer. Detection is the provider's "stop generating"
+ * button: wait for it to appear, then for it to go away. If it never appears
+ * (selector drift, an instant reply) fall back to a fixed grace period rather
+ * than stalling the whole sequence.
+ */
+async function ytsWaitForReply(cfg, maxMs = 300000) {
+  const sel = cfg.stopSelectors || [];
+  const busy = () => sel.some(s => ytsIsVisible(document.querySelector(s)));
+
+  const startedBy = Date.now() + 15000;
+  while (Date.now() < startedBy && !busy()) await ytsSleep(500);
+  if (!busy()) { await ytsSleep(6000); return; }
+
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline && busy()) await ytsSleep(1000);
+  await ytsSleep(2000); // let the composer re-enable before typing into it
+}
+
 function ytsClickSend(selectors) {
   for (const sel of selectors) {
     const btn = document.querySelector(sel);
@@ -127,39 +158,66 @@ function ytsSubmitViaKey(el) {
   if (form) { try { form.requestSubmit(); } catch (_) {} }
 }
 
+/** Paste one message and send it. @returns {boolean} did the text land? */
+async function ytsSendOne(cfg, text, autoSubmit) {
+  const input = await ytsWaitForInput(cfg.inputSelectors, 20000);
+  if (!input) return false;
+
+  input.focus();
+  await ytsSleep(400);
+
+  ytsPasteText(input, text);
+  await ytsSleep(600); // give the framework time to process the paste event
+
+  if (!ytsInputHasText(input, text)) {
+    console.warn('[YT Summarizer] paste did not reach the editor');
+    return false;
+  }
+
+  if (autoSubmit) {
+    await ytsSleep(800);
+    let sent = false;
+    for (let attempts = 0; attempts < 6 && !sent; attempts++) {
+      if (ytsClickSend(cfg.sendSelectors)) sent = true;
+      else await ytsSleep(500);
+    }
+    if (!sent) ytsSubmitViaKey(input);
+  }
+  return true;
+}
+
 /**
  * Entry point used by each provider script.
- * @param {{inputSelectors: string[], sendSelectors: string[]}} cfg
+ * @param {{inputSelectors: string[], sendSelectors: string[], stopSelectors?: string[]}} cfg
  */
 async function ytsRunPaste(cfg) {
   const pending = await ytsClaimPending();
   if (!pending) return;
 
+  // A split transcript is posted as several messages into the SAME conversation,
+  // which is the whole point: the model keeps the earlier parts as context. That
+  // only works if we're allowed to press Send — without auto-submit we can just
+  // drop the first part in the composer and leave the rest to the user.
+  const parts = pending.autoSubmit ? pending.parts : pending.parts.slice(0, 1);
+
   let consumed = false;
   try {
-    const input = await ytsWaitForInput(cfg.inputSelectors, 20000);
-    if (!input) return; // released in `finally`, so the payload survives
-
-    input.focus();
-    await ytsSleep(400);
-
-    ytsPasteText(input, pending.text);
-    await ytsSleep(600); // give the framework time to process the paste event
-
-    if (!ytsInputHasText(input, pending.text)) {
-      console.warn('[YT Summarizer] paste did not reach the editor — leaving the payload for a retry');
-      return;
-    }
-    consumed = true;
-
-    if (pending.autoSubmit) {
-      await ytsSleep(800);
-      let sent = false;
-      for (let attempts = 0; attempts < 6 && !sent; attempts++) {
-        if (ytsClickSend(cfg.sendSelectors)) sent = true;
-        else await ytsSleep(500);
+    for (let i = 0; i < parts.length; i++) {
+      const ok = await ytsSendOne(cfg, parts[i], pending.autoSubmit);
+      if (!ok) {
+        // Nothing sent at all: leave the payload in storage so a reload retries.
+        if (i === 0) return;
+        console.warn(`[YT Summarizer] stopped after part ${i}/${parts.length}`);
+        break;
       }
-      if (!sent) ytsSubmitViaKey(input);
+      if (i === 0) {
+        // Drop the payload as soon as the first part lands: the rest of the
+        // sequence can take minutes, and the claim only holds off other tabs
+        // for 60 s — a second tab must never replay this conversation.
+        consumed = true;
+        await chrome.storage.local.remove('pendingLLMContent');
+      }
+      if (i < parts.length - 1) await ytsWaitForReply(cfg);
     }
   } finally {
     await ytsReleasePending(consumed);

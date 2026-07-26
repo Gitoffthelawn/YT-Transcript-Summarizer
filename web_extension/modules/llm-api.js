@@ -1,5 +1,5 @@
 // ── LLM API Calls ─────────────────────────────────────────────────────────────
-import { CONFIG } from './config.js';
+import { CONFIG, chunkNotes } from './config.js';
 
 async function fetchLLM(url, headers, bodyObj, providerName) {
   const ctrl = new AbortController();
@@ -48,6 +48,91 @@ function trimTranscript(transcript, provider) {
     kept: max,
     total: transcript.length
   };
+}
+
+/**
+ * Split a transcript into `parts` slices of roughly equal size, snapping each
+ * cut to the nearest line break or sentence end so a chunk never starts
+ * mid-word. Returns a single-element array when splitting is not requested.
+ */
+export function splitTranscript(text, parts) {
+  const src = String(text ?? '');
+  const n = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(parts) || 1));
+  if (n === 1 || !src) return [src];
+
+  const size = Math.ceil(src.length / n);
+  const out = [];
+  let pos = 0;
+
+  for (let i = 0; i < n && pos < src.length; i++) {
+    if (i === n - 1) { out.push(src.slice(pos)); break; }
+    let end = Math.min(src.length, pos + size);
+    // Search the last 15% of the slice for a clean boundary; if there is none
+    // (a caption track with no punctuation at all) the hard cut stands.
+    const lo = Math.max(pos + 1, end - Math.floor(size * 0.15));
+    const seg = src.slice(lo, end);
+    // A line break is the better cut (caption cues are whole lines); a sentence
+    // end is the fallback so a chunk at least doesn't start mid-sentence.
+    const nl = seg.lastIndexOf('\n');
+    const cut = nl >= 0 ? nl : seg.lastIndexOf('. ');
+    if (cut > 0) end = lo + cut + 1;
+    out.push(src.slice(pos, end));
+    pos = end;
+  }
+
+  return out.map(s => s.trim()).filter(s => s.length);
+}
+
+/**
+ * How many parts this transcript should actually be split into, given the
+ * user's settings. Below `chunkMinChars` the split is skipped: paying for N
+ * calls on a 20-minute video buys nothing.
+ * @returns {number} 1 when the transcript should be sent in a single call
+ */
+export function plannedChunkCount(transcript, settings) {
+  const parts = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
+  if (parts === 1) return 1;
+  const min = Number.isFinite(settings?.chunkMinChars) ? settings.chunkMinChars : CONFIG.chunking.defaultMinChars;
+  if (String(transcript ?? '').length < min) return 1;
+  return parts;
+}
+
+/** The prompt sent with chunk `i` of `n` (1-based), in the transcript language. */
+export function chunkPrompt(basePrompt, i, n, lang) {
+  return `${basePrompt}\n\n---\n\n${chunkNotes(lang).instruction(i, n)}`;
+}
+
+/** Heading placed above each partial summary when the parts are joined. */
+export function chunkHeading(i, n, lang) {
+  return `## ${chunkNotes(lang).part} ${i}/${n}`;
+}
+
+/** Follow-up message asking a web chat to fuse the parts it has already seen. */
+export function mergeChatPrompt(n, lang) {
+  return chunkNotes(lang).mergeChat(n);
+}
+
+/** Prompt for the extra API call that fuses the partial summaries. */
+export function mergeApiPrompt(basePrompt, n, lang) {
+  return `${basePrompt}\n\n---\n\n${chunkNotes(lang).mergeApi(n)}`;
+}
+
+/**
+ * The full sequence of messages a run produces: one per chunk, plus the merge
+ * request when asked for. Web mode posts them into one conversation; API mode
+ * uses the chunk messages and merges separately (it has the partials in hand).
+ */
+export function buildChunkMessages(transcript, settings) {
+  const lang = settings.transcriptLang || 'en';
+  const n = plannedChunkCount(transcript, settings);
+  if (n === 1) return { parts: [`${settings.prompt}\n\n---\n\n${transcript}`], chunks: 1, merged: false };
+
+  const slices = splitTranscript(transcript, n);
+  const count = slices.length;
+  const parts = slices.map((s, i) => `${chunkPrompt(settings.prompt, i + 1, count, lang)}\n\n---\n\n${s}`);
+  const merged = !!settings.chunkMerge;
+  if (merged) parts.push(mergeChatPrompt(count, lang));
+  return { parts, chunks: count, merged };
 }
 
 function requireKey(apiKey, providerName) {

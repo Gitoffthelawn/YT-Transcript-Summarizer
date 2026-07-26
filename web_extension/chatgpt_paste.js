@@ -16,4 +16,10 @@ ytsRunPaste({
     'button[data-testid*="send"]',
     'button[type="submit"]',
   ],
+  // Shown while ChatGPT is answering; used to pace a multi-part transcript.
+  stopSelectors: [
+    'button[data-testid="stop-button"]',
+    'button[aria-label*="Stop"]',
+    'button[aria-label*="stop"]',
+  ],
 });

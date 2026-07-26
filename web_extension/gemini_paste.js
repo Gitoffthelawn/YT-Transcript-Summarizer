@@ -17,4 +17,11 @@ ytsRunPaste({
     '.send-button',
     'button[type="submit"]',
   ],
+  // Shown while Gemini is answering; used to pace a multi-part transcript.
+  stopSelectors: [
+    'button[aria-label*="Stop"]',
+    'button[aria-label*="stop"]',
+    'button[aria-label*="Interrompi"]',
+    '.stop-icon',
+  ],
 });

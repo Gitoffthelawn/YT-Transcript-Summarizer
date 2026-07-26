@@ -93,6 +93,22 @@
     <input type="number" id="web-delay" min="10" max="300" value="30">
     <span class="field-unit">s</span>
   </div>
+  <div class="settings-divider"></div>
+  <div class="field field-row">
+    <label>✂️ Split long transcripts <span class="label-note">— API mode: number of parts (1 = off)</span></label>
+    <input type="number" id="chunk-parts" min="1" max="20" value="1" title="Send the transcript to the model in this many separate calls and join the partial summaries">
+    <span class="field-unit">×</span>
+  </div>
+  <div class="field field-row">
+    <label>&nbsp;&nbsp;&nbsp;&nbsp;↳ only if longer than <span class="label-note">— thousands of characters</span></label>
+    <input type="number" id="chunk-min-chars" min="1" max="2000" value="100" title="Shorter transcripts are sent in a single call regardless of the setting above">
+    <span class="field-unit">k</span>
+  </div>
+  <label class="check-row">
+    <input type="checkbox" id="chunk-merge-cb">
+    <span>🧩 Final merge pass <span class="label-note">— fuse the parts into one summary</span></span>
+  </label>
+  <div class="field-hint">Useful on very long videos, where a single request would truncate the transcript or lose detail. In API mode each part is a separate billed call; in Web mode the parts are posted one after another into the same chat (requires ↵ Auto-submit).</div>
 </div>
 
 <!-- History panel -->
