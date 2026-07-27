@@ -291,6 +291,13 @@ async function processJob(job, settings) {
     const transcriptLang = job.lang || settings.transcriptLang || 'en';
     debugLog += `Preferred transcript language: "${transcriptLang}"\n\n`;
     const effectivePrompt = job.prompt || settings.prompt;
+    // Per-video overrides (the ✎ panel) win over the values chosen for the run.
+    const jobSettings = {
+      ...settings,
+      prompt: effectivePrompt,
+      transcriptLang,
+      chunkParts: job.split ?? settings.chunkParts
+    };
 
     await updateJobStatus(job.id, 'active', '📋 Fetching transcript...');
     const result = await acquireTranscript(videoId, transcriptLang, (m) => { debugLog += `${m}\n`; });
@@ -348,7 +355,7 @@ async function processJob(job, settings) {
       // A split transcript becomes several messages posted one after another
       // into the same conversation (see paste_common.js), so the model still
       // sees the whole video without any single message being enormous.
-      const web = buildChunkMessages(transcript, { ...settings, prompt: effectivePrompt });
+      const web = buildChunkMessages(transcript, jobSettings);
 
       if (settings.saveTranscriptFile) {
         await saveWebParts(web.parts, displayTitle, videoId);
@@ -373,7 +380,7 @@ async function processJob(job, settings) {
 
     let llm;
     try {
-      llm = await summarizeTranscript(transcript, { ...settings, prompt: effectivePrompt }, job.id, (m) => { debugLog += m; }, `🤖 ${providerName}`);
+      llm = await summarizeTranscript(transcript, jobSettings, job.id, (m) => { debugLog += m; }, `🤖 ${providerName}`);
     } catch (llmErr) {
       // Keep the per-video debug dump the API path has always produced, but
       // never let a failed dump replace the real error message.

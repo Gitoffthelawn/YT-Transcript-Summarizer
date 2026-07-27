@@ -66,10 +66,7 @@ export async function persistSettings() {
   const saveTranscriptFile = document.getElementById('save-file-cb').checked;
   const summaryLength     = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
   const webDelay          = Math.max(10, parseInt(document.getElementById('web-delay').value, 10) || 30);
-  // Stored in characters (what llm-api reasons about), edited in thousands.
-  const chunkParts        = clamp(parseInt(document.getElementById('chunk-parts').value, 10) || 1, 1, CONFIG.chunking.maxParts);
-  const chunkMinCharsK    = clamp(parseInt(document.getElementById('chunk-min-chars').value, 10) || 100, 1, 2000);
-  const chunkMinChars     = chunkMinCharsK * 1000;
+  const chunkParts        = clamp(parseInt(document.getElementById('split-select-inline').value, 10) || 1, 1, CONFIG.chunking.maxParts);
   const chunkMerge        = document.getElementById('chunk-merge-cb').checked;
 
   const { apiKeys: storedKeys = {}, models: storedModels = {} } =
@@ -83,7 +80,7 @@ export async function persistSettings() {
     apiKey: provider === 'anthropic' ? apiKey : (storedKeys.anthropic || ''),
     model:  provider === 'anthropic' ? model  : (storedModels.anthropic || 'claude-sonnet-4-6'),
     transcriptLang, customPrompt, mode, useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, summaryLength, webDelay,
-    chunkParts, chunkMinChars, chunkMerge
+    chunkParts, chunkMerge
   });
 }
 

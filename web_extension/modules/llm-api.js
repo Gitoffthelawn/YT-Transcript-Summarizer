@@ -84,17 +84,16 @@ export function splitTranscript(text, parts) {
 }
 
 /**
- * How many parts this transcript should actually be split into, given the
- * user's settings. Below `chunkMinChars` the split is skipped: paying for N
- * calls on a 20-minute video buys nothing.
- * @returns {number} 1 when the transcript should be sent in a single call
+ * How many parts this transcript is actually split into. The number the user
+ * picked is honoured as-is — the only adjustment is downwards, when the
+ * transcript is too short to fill that many parts.
+ * @returns {number} 1 when the transcript should be sent in a single request
  */
 export function plannedChunkCount(transcript, settings) {
-  const parts = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
-  if (parts === 1) return 1;
-  const min = Number.isFinite(settings?.chunkMinChars) ? settings.chunkMinChars : CONFIG.chunking.defaultMinChars;
-  if (String(transcript ?? '').length < min) return 1;
-  return parts;
+  const asked = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
+  if (asked === 1) return 1;
+  const fits = Math.floor(String(transcript ?? '').length / CONFIG.chunking.minPartChars);
+  return Math.max(1, Math.min(asked, fits));
 }
 
 /** The prompt sent with chunk `i` of `n` (1-based), in the transcript language. */

@@ -44,6 +44,8 @@ export function updateChipsForMode(mode) {
   document.getElementById('chip-save-file').classList.toggle('hidden', mode !== 'web');
   document.getElementById('chip-thinking').classList.toggle('hidden',
     mode !== 'api' || !info.supportsThinking);
+  document.getElementById('split-select-inline').classList.toggle('hidden', isTranscript);
+  refreshMergeChip();
   document.getElementById('chip-fmt-chat').classList.toggle('hidden', isTranscript);
   document.getElementById('chip-fmt-md').classList.toggle('hidden', isTranscript);
   document.getElementById('chip-len-short').classList.toggle('hidden', isTranscript);
@@ -71,16 +73,42 @@ export function setSummaryLength(len) {
   document.getElementById('chip-len-long').classList.toggle('on', len === 'long');
 }
 
+// ── Transcript splitting ──────────────────────────────────────────────────────
+// Kept in sync with the <option>s of #split-select-inline.
+export const SPLIT_CHOICES = [1, 2, 3, 4, 5, 6, 8, 10];
+
+/** Parts selected for the whole run (1 = send the transcript in one go). */
+export function currentSplit() {
+  return parseInt(document.getElementById('split-select-inline').value, 10) || 1;
+}
+
+export function setSplit(parts) {
+  const n = SPLIT_CHOICES.includes(parts) ? parts : 1;
+  document.getElementById('split-select-inline').value = String(n);
+  refreshMergeChip();
+}
+
+// "Merge parts" only means something once there is more than one part, and
+// Transcript mode never talks to a model at all.
+function refreshMergeChip() {
+  const isTranscript = document.getElementById('mode-select').value === 'transcript';
+  document.getElementById('chip-merge').classList.toggle('hidden', isTranscript || currentSplit() === 1);
+}
+
 // ── Per-job settings ──────────────────────────────────────────────────────────
 export function toggleJobSettings(id) {
   const el = document.getElementById(`job-settings-${id}`);
   if (el) el.classList.toggle('hidden');
 }
 
+function jobHasCustom(job) {
+  return !!job.prompt || (job.format != null) || (job.length != null) || (job.lang != null) || (job.split != null);
+}
+
 export function updateJobEditBtn(id, job) {
   const btn = document.querySelector(`.job-edit-btn[data-job-id="${id}"]`);
   if (!btn) return;
-  const hasCustom = !!job.prompt || (job.format != null) || (job.length != null) || (job.lang != null);
+  const hasCustom = jobHasCustom(job);
   btn.classList.toggle('has-custom', hasCustom);
   btn.title = hasCustom ? 'Custom settings active — click to edit' : 'Customize settings for this video';
   const resetBtn = document.querySelector(`.job-reset-btn[data-job-id="${id}"]`);
@@ -126,6 +154,14 @@ export async function setJobLength(id, len) {
   await chrome.storage.local.set({ jobs: state.jobs });
 }
 
+export async function setJobSplit(id, parts) {
+  const job = state.jobs.find(j => j.id === id);
+  if (!job) return;
+  job.split = parts; // null means "use the value chosen for the whole run"
+  updateJobEditBtn(id, job);
+  await chrome.storage.local.set({ jobs: state.jobs });
+}
+
 export async function resetJobSettings(id) {
   const job = state.jobs.find(j => j.id === id);
   if (!job) return;
@@ -133,6 +169,7 @@ export async function resetJobSettings(id) {
   job.length = null;
   job.lang = null;
   job.prompt = null;
+  job.split = null;
   await chrome.storage.local.set({ jobs: state.jobs });
   renderJobs();
   const el = document.getElementById(`job-settings-${id}`);
@@ -176,10 +213,11 @@ export function renderJobs() {
   const isTranscript = mode === 'transcript';
   const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
   const globalLen = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
+  const globalSplit = currentSplit();
   const dis = state.running ? 'disabled' : '';
 
   list.innerHTML = visibleJobs.map(j => {
-    const hasCustom = !!j.prompt || (j.format != null) || (j.length != null) || (j.lang != null);
+    const hasCustom = jobHasCustom(j);
     const activeFmt = j.format ?? globalFmt;
     const activeLen = j.length ?? globalLen;
 
@@ -213,6 +251,13 @@ export function renderJobs() {
           <option value="tr" ${j.lang === 'tr' ? 'selected' : ''}>🇹🇷 TR</option>
           <option value="hi" ${j.lang === 'hi' ? 'selected' : ''}>🇮🇳 HI</option>
           <option value="auto" ${j.lang === 'auto' ? 'selected' : ''}>🌐 Auto</option>
+        </select>
+        <span class="job-lang-label">✂️ Split</span>
+        <select class="job-split-select" data-job-id="${j.id}" ${dis} title="Split this video's transcript into this many parts">
+          <option value="" ${j.split == null ? 'selected' : ''}>🔗 Global (${globalSplit === 1 ? 'off' : globalSplit})</option>
+          ${SPLIT_CHOICES.map(n =>
+            `<option value="${n}" ${j.split === n ? 'selected' : ''}>${n === 1 ? '1 (off)' : n}</option>`
+          ).join('')}
         </select>
       </div>`;
 

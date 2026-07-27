@@ -4,7 +4,7 @@ import { state } from './modules/popup-state.js';
 import { renderHistory, clearHistory } from './modules/popup-history.js';
 import { populateTTSVoices, sendTTS, ttsPlay, ttsPauseResume, ttsStop, updateTTSStatus } from './modules/popup-tts.js';
 import { applyProvider, persistSettings, saveSettings, updatePromptPreview, togglePromptEditor } from './modules/popup-settings.js';
-import { renderJobs, updateJob, setUIAsRunning, setUIAsStopped, setMode, setChip, setOutputFormat, setSummaryLength, toggleJobSettings, updateJobEditBtn, setJobFormat, setJobLength, resetJobSettings, setJobLang } from './modules/popup-render.js';
+import { renderJobs, updateJob, setUIAsRunning, setUIAsStopped, setMode, setChip, setOutputFormat, setSummaryLength, toggleJobSettings, updateJobEditBtn, setJobFormat, setJobLength, resetJobSettings, setJobLang, setJobSplit, setSplit } from './modules/popup-render.js';
 
 const PANELS = ['panel-settings', 'panel-history', 'panel-tts'];
 
@@ -25,7 +25,7 @@ function makeJob(url, title = null) {
   return {
     id: newJobId(), url, title,
     status: 'queued', statusText: 'Queued',
-    prompt: null, format: null, length: null
+    prompt: null, format: null, length: null, split: null
   };
 }
 
@@ -87,7 +87,7 @@ async function init() {
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile',
     'outputFormat', 'summaryLength', 'jobs', 'running', 'theme',
     'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay', 'ttsLocalUrl',
-    'chunkParts', 'chunkMinChars', 'chunkMerge'
+    'chunkParts', 'chunkMerge'
   ]);
 
   const {
@@ -95,7 +95,7 @@ async function init() {
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile,
     outputFormat, summaryLength, jobs: savedJobs, running: savedRunning, theme,
     ttsState, ttsRate, ttsVoice, ttsText, webDelay, ttsLocalUrl,
-    chunkParts, chunkMinChars, chunkMerge
+    chunkParts, chunkMerge
   } = stored;
 
   // Migrate legacy apiKey → apiKeys.anthropic
@@ -133,10 +133,8 @@ async function init() {
   if (ttsState) updateTTSStatus(ttsState);
   if (ttsLocalUrl) document.getElementById('tts-local-url').value = ttsLocalUrl;
   document.getElementById('web-delay').value = webDelay ?? 30;
-  document.getElementById('chunk-parts').value = chunkParts ?? CONFIG.chunking.defaultParts;
-  document.getElementById('chunk-min-chars').value =
-    Math.round((chunkMinChars ?? CONFIG.chunking.defaultMinChars) / 1000);
-  document.getElementById('chunk-merge-cb').checked = !!chunkMerge;
+  setSplit(chunkParts ?? CONFIG.chunking.defaultParts);
+  setChip('chip-merge', !!chunkMerge);
 
   if (transcriptLang) {
     document.getElementById('transcript-lang-select').value = transcriptLang;
@@ -259,6 +257,13 @@ async function init() {
     }
   });
 
+  // ── Inline split selector ────────────────────────────────────────────────
+  document.getElementById('split-select-inline').addEventListener('change', async (e) => {
+    setSplit(parseInt(e.target.value, 10) || 1);
+    await persistSettings();
+    renderJobs(); // the per-video rows show the global value as their default
+  });
+
   document.getElementById('url-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') addUrl();
   });
@@ -360,11 +365,16 @@ async function init() {
     if (resetBtn && !resetBtn.disabled) { resetJobSettings(Number(resetBtn.dataset.jobId)); return; }
   });
 
-  // Per-job language select uses 'change' event (not click)
+  // Per-job selects use 'change' event (not click)
   document.getElementById('job-list').addEventListener('change', e => {
     const langSel = e.target.closest('.job-lang-select');
     if (langSel && !langSel.disabled) {
       setJobLang(Number(langSel.dataset.jobId), langSel.value);
+      return;
+    }
+    const splitSel = e.target.closest('.job-split-select');
+    if (splitSel && !splitSel.disabled) {
+      setJobSplit(Number(splitSel.dataset.jobId), splitSel.value ? parseInt(splitSel.value, 10) : null);
     }
   });
 
@@ -723,11 +733,11 @@ async function startBatch() {
   const {
     models = {}, customEndpointUrl, transcriptLang, customPrompt, mode,
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, webDelay: storedDelay,
-    chunkParts, chunkMinChars, chunkMerge
+    chunkParts, chunkMerge
   } = await chrome.storage.local.get([
     'models', 'customEndpointUrl', 'transcriptLang', 'customPrompt', 'mode',
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile', 'webDelay',
-    'chunkParts', 'chunkMinChars', 'chunkMerge'
+    'chunkParts', 'chunkMerge'
   ]);
 
   const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
@@ -799,7 +809,6 @@ async function startBatch() {
       saveTranscriptFile: !!saveTranscriptFile,
       webDelay: storedDelay ?? 30,
       chunkParts: chunkParts ?? CONFIG.chunking.defaultParts,
-      chunkMinChars: chunkMinChars ?? CONFIG.chunking.defaultMinChars,
       chunkMerge: !!chunkMerge
     }
   });

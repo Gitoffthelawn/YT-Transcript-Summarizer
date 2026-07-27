@@ -149,13 +149,15 @@ API keys are stored locally in browser storage and are only ever sent to the res
 
 ### Splitting long transcripts
 
-A very long video can exceed what one request handles well — the transcript gets truncated to the model's context, or the summary thins out towards the end. In **Advanced Settings** you can set **✂️ Split long transcripts** to the number of parts you want (`1` = off, max 20), plus a threshold in thousands of characters below which the split is skipped (default 100k, roughly a 3-hour video). The transcript is cut into that many slices at line/sentence boundaries, and each one is sent with a note telling the model it is seeing part *i* of *n* of a single video — in your transcript language.
+A very long video can exceed what one request handles well — the transcript gets truncated to the model's context, or the summary thins out towards the end. The **✂️** dropdown in the options bar sets how many equal parts the transcript is cut into (`1 part` = off, up to 10), and applies to every video in the queue. To override it for a single video, open that video's **✎** panel and pick a number next to **✂️ Split** — `🔗 Global` keeps whatever the dropdown says.
+
+The number you pick is what you get: the transcript is cut into that many slices at line/sentence boundaries, and each is sent with a note telling the model it is seeing part *i* of *n* of a single video, in your transcript language. The only automatic adjustment is downwards — a transcript too short to fill the requested parts (under ~2 000 characters each) is split into fewer, so a 3-minute video never becomes 8 pointless requests.
 
 **API mode** — each part is summarized in its own call and the partial summaries are concatenated under `## Part i/n` headings. Each part is a separate billed call and gets its own rate-limit retries, so a 429 on part 3 never re-sends parts 1 and 2.
 
 **Web mode** — the parts are pasted one after another into the *same* conversation, so the model keeps the earlier parts as context. The extension waits for each answer to finish (it watches the provider's "stop generating" button) before sending the next part. This needs **↵ Auto-submit**: without permission to press Send only part 1 is pasted, and the status line says so. With **💾 Save .txt** enabled each part is also written to its own `_part1of3.txt` file, so you can paste the rest by hand.
 
-**🧩 Final merge pass** (optional) asks for one more answer that fuses the partial summaries into a single unified summary. In web mode it is just an extra message at the end of the conversation; in API mode it is an extra call that receives the partials — and if that call fails, the partial summaries are kept rather than the whole run being lost.
+**🧩 Merge parts** (optional, appears next to the dropdown as soon as you pick more than one part) asks for one more answer that fuses the partial summaries into a single unified summary. In web mode it is just an extra message at the end of the conversation; in API mode it is an extra call that receives the partials — and if that call fails, the partial summaries are kept rather than the whole run being lost.
 
 Both work for single videos and for **📎 Combine all**.
 

@@ -51,13 +51,15 @@ export const CONFIG = {
     default:    200000
   },
 
-  // Optional manual splitting of a long transcript into several sequential API
-  // calls. Off by default (parts = 1): it multiplies cost and latency, and only
-  // pays off on videos long enough that one call would truncate or lose detail.
+  // Optional splitting of a transcript into several sequential requests. Off by
+  // default (parts = 1): it multiplies cost and latency, and only pays off on
+  // videos long enough that one request would truncate or lose detail.
   chunking: {
-    maxParts:         20,      // upper bound for the UI / sanitizer
-    defaultParts:     1,       // 1 = disabled
-    defaultMinChars:  100000   // don't split anything shorter than this
+    maxParts:      10,     // upper bound for the UI / sanitizer
+    defaultParts:  1,      // 1 = disabled
+    // The only case where the requested number is not honoured: splitting a
+    // 3-minute video into 8 pieces would just be 8 pointless requests.
+    minPartChars:  2000
   }
 };
 

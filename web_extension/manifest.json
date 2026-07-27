@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT Transcript Summarizer",
-  "version": "10.15.0",
+  "version": "10.15.1",
   "description": "Summarize YouTube videos with Claude, OpenAI, Gemini and more — reliable transcript extraction via InnerTube API.",
   "browser_specific_settings": {
     "gecko": {
