@@ -1,0 +1,110 @@
+<!doctype html>
+<!--
+  Zero-cost Gecko check: does ytsPasteText() actually put text into the three kinds of
+  editor the providers use? No account, no network, no messages sent.
+
+  Loads the REAL paste_common.js rather than a copy, for the same reason
+  merge-inline.test.mjs does: a copy is how divergence starts.
+
+  The three archetypes mirror what §5.1/§6 of TESTING-TODO measured on Chrome:
+    A  quill  — plain contenteditable, nothing intercepts paste  (Gemini)
+                → Method 1 does nothing, everything rests on execCommand (Method 2)
+    B  pm     — editor that intercepts paste and inserts it itself (Claude/ChatGPT)
+                → Method 1 must be seen as handled, so Method 2 is skipped (no double paste)
+    C  area   — plain <textarea>                                  (fallback)
+-->
+<meta charset="utf-8">
+<title>ytsPasteText on Gecko</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1.5rem; }
+  .editor { border: 1px solid #999; min-height: 3em; padding: .5em; margin: .4em 0 1.2em; white-space: pre-wrap; }
+  pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; }
+</style>
+
+<h1>ytsPasteText on Gecko</h1>
+
+<h2>A — quill-like (no interception)</h2>
+<div id="quill" class="editor ql-editor" contenteditable="true"></div>
+
+<h2>B — ProseMirror-like (intercepts paste)</h2>
+<div id="pm" class="editor" contenteditable="true"></div>
+
+<h2>C — textarea</h2>
+<textarea id="area" class="editor"></textarea>
+
+<h2>Results</h2>
+<pre id="out">running…</pre>
+
+<script src="../../paste_common.js"></script>
+<script>
+(() => {
+  // B behaves like a real rich-text editor: it takes over the paste and inserts the
+  // text itself. That is exactly the case ytsPasteText must detect via preventDefault.
+  let pmHandled = 0;
+  const pm = document.getElementById('pm');
+  pm.addEventListener('paste', (e) => {
+    e.preventDefault();
+    pmHandled++;
+    const t = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    // Record what the framework actually received — null clipboardData on a synthetic
+    // event is a known Gecko difference and would show up right here.
+    pm.dataset.got = String(t.length);
+    pm.textContent += t;
+  });
+
+  const readBack = (el) => ('value' in el && el.tagName === 'TEXTAREA') ? el.value : el.innerText;
+
+  const SAMPLE = 'Parte 1 di 2\n\n---\n\n' + 'x'.repeat(2000);
+
+  const cases = [
+    { id: 'quill', note: 'Gemini-like: rests on execCommand' },
+    { id: 'pm',    note: 'Claude/ChatGPT-like: must be intercepted' },
+    { id: 'area',  note: 'plain textarea' },
+  ];
+
+  const results = [];
+  for (const c of cases) {
+    const el = document.getElementById(c.id);
+    el.focus();
+    let returned = null, error = null;
+    try { returned = ytsPasteText(el, SAMPLE); } catch (e) { error = String(e); }
+    const got = readBack(el);
+    results.push({
+      case: c.id,
+      note: c.note,
+      returned,
+      error,
+      landed: got.length,
+      expected: SAMPLE.length,
+      // The thing that actually matters: is the whole text in there, exactly once?
+      ok: got.includes(SAMPLE.slice(-200)) && got.length >= SAMPLE.length && got.length < SAMPLE.length * 1.5,
+      doubled: got.length >= SAMPLE.length * 1.8,
+    });
+  }
+
+  const extra = {
+    pmPasteEventsSeen: pmHandled,
+    pmClipboardDataChars: document.getElementById('pm').dataset.got ?? '(handler never ran)',
+    execCommandSupported: (() => {
+      const d = document.createElement('div');
+      d.contentEditable = 'true';
+      document.body.appendChild(d);
+      d.focus();
+      let r = null;
+      try { r = document.execCommand('insertText', false, 'probe'); } catch (e) { r = String(e); }
+      const text = d.innerText;
+      d.remove();
+      return { returned: r, inserted: text };
+    })(),
+    userAgent: navigator.userAgent,
+  };
+
+  // ytsInstructionHead is pure string work, but it is what fix M leans on — cheap to confirm.
+  const head = typeof ytsInstructionHead === 'function' ? ytsInstructionHead(SAMPLE) : '(missing)';
+  extra.instructionHead = head;
+
+  const payload = { results, extra };
+  window.__ytsResults = payload;
+  document.getElementById('out').textContent = JSON.stringify(payload, null, 2);
+})();
+</script>

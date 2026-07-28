@@ -1,0 +1,12 @@
+{
+  "name": "yt-transcript-summarizer",
+  "version": "10.19.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling only — the extension itself ships from manifest.json and has no npm dependencies.",
+  "scripts": {
+    "test": "node test/chunking.test.mjs && node test/paste-report.test.mjs && node test/api-merge.test.mjs && node test/paste-watch.test.mjs && node test/combined-failure.test.mjs && node test/merge-inline.test.mjs",
+    "build": "node tools/build-zip.mjs",
+    "build:dry": "node tools/build-zip.mjs --dry-run"
+  }
+}

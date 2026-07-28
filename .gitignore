@@ -23,7 +23,8 @@ web app/.env
 web app/.env.local
 web app/.env.*.local
 
-# Web extension build artifact
+# Web extension build artifacts
+web_extension/dist/
 web_extension/web_extension.zip
 
 # Logs
@@ -32,3 +33,7 @@ npm-debug.log*
 
 # Chrome unpacked-load artifact
 web_extension/_metadata/
+
+# Local handoff/working notes (not part of the shipped project)
+web_extension/TESTING-TODO.md
+web_extension/NOTES.md

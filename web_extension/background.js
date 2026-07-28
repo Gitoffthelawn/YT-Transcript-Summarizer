@@ -355,22 +355,35 @@ async function processJob(job, settings) {
       // A split transcript becomes several messages posted one after another
       // into the same conversation (see paste_common.js), so the model still
       // sees the whole video without any single message being enormous.
-      const web = buildChunkMessages(transcript, jobSettings);
+      // `maxMessageChars` is what keeps a part inside the composer's own limit;
+      // it can only be acted on when we are allowed to send the follow-up parts.
+      const web = buildChunkMessages(transcript, webChunkSettings(jobSettings, provider, settings.autoSubmit));
 
       if (settings.saveTranscriptFile) {
         await saveWebParts(web.parts, displayTitle, videoId);
       }
-      if (settings.autoPaste || settings.autoSubmit) {
-        await setPendingLLMContent(web.parts, !!settings.autoSubmit);
+      const willPaste = !!(settings.autoPaste || settings.autoSubmit);
+      if (willPaste) {
+        await setPendingLLMContent(web.parts, !!settings.autoSubmit, job.id, web.mergePlan);
       }
       await chrome.tabs.create({ url: webUrl, active: true });
 
-      const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
-                      : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
-                      :                       `✅ Opened ${providerLabel} (transcript saved)`;
       const splitNote = webSplitNote(web, settings);
+      const overflowNote = webOverflowNote(web, providerLabel);
       await addToHistory(job.url, displayTitle);
-      await updateJobStatus(job.id, 'done', `${doneLabel}${splitNote}${warn}: ${displayTitle.slice(0, 35)}`);
+      // Only the content script knows whether the text actually landed, so the
+      // status stays provisional until it reports back (see pasteReport).
+      const label = willPaste
+        ? `📤 Sending to ${providerLabel}`
+        : `✅ Opened ${providerLabel} (transcript saved)`;
+      await updateJobStatus(job.id, 'done',
+        `${label}${splitNote}${overflowNote}${warn}: ${displayTitle.slice(0, 35)}`);
+      if (willPaste) {
+        await pasteWatchAdd(job.id, {
+          providerLabel, title: displayTitle, chunks: web.chunks, warn, overflowNote,
+          merged: web.merged, autoSubmit: !!settings.autoSubmit
+        });
+      }
       return;
     }
 
@@ -432,12 +445,117 @@ function providerLabelOf(provider) {
 // transcript if the page was slow or the user was logged out) and kept it
 // forever otherwise, so an unrelated visit to claude.ai days later got a
 // surprise paste.
-async function setPendingLLMContent(parts, autoSubmit) {
+async function setPendingLLMContent(parts, autoSubmit, jobId = null, mergePlan = null) {
   const list = Array.isArray(parts) ? parts : [parts];
   await chrome.storage.local.set({
     // `text` stays for the single-message case so nothing else has to care.
-    pendingLLMContent: { parts: list, text: list[0], autoSubmit, ts: Date.now() }
+    // `jobId` travels with the payload so the content script can report the
+    // real outcome back to the job it belongs to.
+    // `merge` lets the content script rebuild the last message out of the
+    // partial answers it can read on the page (see mergePlanFor in llm-api.js).
+    pendingLLMContent: { parts: list, text: list[0], autoSubmit, jobId, merge: mergePlan, ts: Date.now() }
   });
+}
+
+// Jobs whose status is still provisional, waiting for the content script's
+// verdict. Kept in storage, not in a Map: posting a split transcript takes
+// minutes and MV3 recycles the service worker long before the last part goes
+// out, which would drop the report — and with it the only failure signal.
+async function pasteWatchAdd(jobId, info) {
+  const { pasteWatch = {} } = await chrome.storage.local.get('pasteWatch');
+  // Entries only ever leave via a report or this cleanup, so an abandoned tab
+  // cannot make the map grow forever.
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+  for (const [id, e] of Object.entries(pasteWatch)) if ((e.ts || 0) < cutoff) delete pasteWatch[id];
+  pasteWatch[jobId] = { ...info, ts: Date.now() };
+  await chrome.storage.local.set({ pasteWatch });
+}
+
+async function pasteWatchTake(jobId) {
+  const { pasteWatch = {} } = await chrome.storage.local.get('pasteWatch');
+  const info = pasteWatch[jobId];
+  if (!info) return null;
+  delete pasteWatch[jobId];
+  await chrome.storage.local.set({ pasteWatch });
+  return info;
+}
+
+/**
+ * The content script telling us what actually happened in the chat tab. Web mode
+ * used to declare "✅ Sent" the moment the tab was created, which was a lie
+ * whenever the paste failed or stopped halfway through a split transcript.
+ */
+async function handlePasteReport(msg) {
+  const info = await pasteWatchTake(msg.jobId);
+  if (!info) return;
+
+  const { providerLabel, title, warn = '', overflowNote = '' } = info;
+  // Two different counts, and mixing them up has already produced a wrong status
+  // once: `total` counts MESSAGES (one more than the parts when a merge request
+  // was appended, and exactly 1 when auto-submit is off), while `chunks` counts
+  // transcript PARTS. Compare on messages, speak to the user in parts.
+  const parts = info.chunks || 1;
+  const total = msg.total || parts;
+  const sent = msg.sent || 0;
+  const tail = `${warn}${overflowNote}: ${String(title).slice(0, 35)}`;
+  const scope = info.combined ? ' (combined)' : '';
+
+  let status = 'done';
+  let text;
+  if (msg.ok && sent >= total) {
+    if (!info.autoSubmit) {
+      // Only part 1 was ever pasted, and nothing was submitted. Saying
+      // "✅ Sent (✂️ 4 parts)" here would be the old lie in a new place.
+      const note = parts > 1 ? ` (✂️ part 1 of ${parts} — auto-submit off)` : '';
+      text = `✅ Pasted into ${providerLabel}${scope}${note}${tail}`;
+    } else {
+      const note = parts > 1 ? ` (✂️ ${parts} parts${info.merged ? ' + merge' : ''})` : '';
+      // The merge message normally carries the partial answers back as text. When
+      // the content script could not read them off the page it falls back to
+      // "merge the summaries above" — which is exactly the case where the model
+      // may quietly summarize only its most recent turns. Say so: a merge that
+      // covered half the video used to look identical to one that covered it all.
+      text = `✅ Sent to ${providerLabel}${scope}${note}${mergeFallbackNote(info, msg)}${tail}`;
+    }
+  } else if (total > parts && sent >= parts) {
+    // Every transcript part landed; only the appended merge request did not.
+    // The video did reach the model in full, so this is a soft failure.
+    // Keyed on `total > parts` (there really was an extra message) rather than on
+    // the `merged` flag, so a stale watch entry can't produce this line.
+    status = 'error';
+    text = `⚠️ All ${parts} parts reached ${providerLabel}${scope}, but the merge request did not${tail}`;
+  } else if (sent > 0) {
+    status = 'error';
+    text = `⚠️ Only part ${sent} of ${parts} reached ${providerLabel}${scope}${tail}`;
+  } else {
+    status = 'error';
+    text = `❌ Paste into ${providerLabel}${scope} failed — reload the tab to retry${tail}`;
+  }
+  // Combined mode drives several queue rows from one paste sequence.
+  const rowUpdated = await updateJobStatus(info.jobIds || msg.jobId, status, text);
+
+  // Failures always get a notification. Successes only when the queue row is
+  // already gone: a split run outlives the popup, which prunes finished jobs on
+  // open, so otherwise the one outcome the user waited minutes for would land
+  // nowhere at all. When the row is still there it speaks for itself.
+  if (status === 'error' || !rowUpdated) {
+    try {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('logo.png'),
+        title: 'YT Summarizer',
+        message: text
+      });
+    } catch (_) {}
+  }
+}
+
+// `mergeInline === false` means the plan was there and the partial answers could
+// not be read; `null`/undefined means there was no merge to inline in the first
+// place (no merge requested, or a report from an older content script).
+function mergeFallbackNote(info, msg) {
+  if (!info.merged || msg.mergeInline !== false) return '';
+  return ' (⚠️ merge relied on the chat’s memory — it may cover only the last parts)';
 }
 
 // One .txt per message when the transcript was split, so the user can paste the
@@ -458,6 +576,25 @@ function webSplitNote(web, settings) {
   if (web.chunks <= 1) return '';
   if (!settings.autoSubmit) return ` (✂️ ${web.chunks} parts — auto-submit off, only part 1 pasted)`;
   return web.merged ? ` (✂️ ${web.chunks} parts + merge)` : ` (✂️ ${web.chunks} parts)`;
+}
+
+// Even at maxParts the worst message can stay over the composer's cap. This is
+// the only signal the user gets that the tail of a part may vanish, so it has to
+// survive into the final status too (see handlePasteReport), not just the
+// provisional one.
+function webOverflowNote(web, providerLabel) {
+  if (!web.overflow) return '';
+  return ` (⚠️ ${Math.ceil(web.overflow / 1000)}k chars over ${providerLabel}'s message limit — the tail of a part may be dropped)`;
+}
+
+// The per-provider composer cap, applied only in web mode and only when we are
+// actually allowed to press Send (see plannedChunkCount / the splitToFit gate).
+function webChunkSettings(base, provider, autoSubmit) {
+  return {
+    ...base,
+    maxMessageChars: CONFIG.maxWebMessageChars[provider] ?? CONFIG.maxWebMessageChars.default,
+    splitToFit: !!autoSubmit
+  };
 }
 
 /**
@@ -620,18 +757,36 @@ async function runBatchCombined(jobs, settings) {
         return;
       }
       const providerLabel = providerLabelOf(provider);
-      const web = buildChunkMessages(combinedTranscript, settings);
+      // Combined is the case with the MOST text of all, so it is the one the
+      // composer cap truncates hardest — it needs the same treatment as the
+      // single-video branch, not the old unbounded split.
+      const web = buildChunkMessages(combinedTranscript, webChunkSettings(settings, provider, settings.autoSubmit));
       await downloadText(combinedContent, `combined_transcripts_${stamp}.txt`);
-      if (settings.autoPaste || settings.autoSubmit) {
-        await setPendingLLMContent(web.parts, !!settings.autoSubmit);
+
+      const ids = fetched.map(r => r.job.id);
+      const title = fetched.map(r => r.title || r.videoId).join(' + ');
+      const willPaste = !!(settings.autoPaste || settings.autoSubmit);
+      if (willPaste) {
+        // `pasteReport` carries a single jobId, so the first job stands for the
+        // whole set; the full list rides in the watch entry and every row is
+        // updated together when the verdict comes back.
+        await setPendingLLMContent(web.parts, !!settings.autoSubmit, ids[0], web.mergePlan);
       }
       await chrome.tabs.create({ url: webUrl, active: true });
-      const doneLabel = settings.autoSubmit ? `✅ Sent to ${providerLabel}`
-                      : settings.autoPaste  ? `✅ Pasted into ${providerLabel}`
-                      :                       `✅ Opened ${providerLabel}`;
+
       const splitNote = webSplitNote(web, settings);
+      const overflowNote = webOverflowNote(web, providerLabel);
       for (const r of fetched) await addToHistory(r.job.url, r.title);
-      await updateJobStatus(fetched.map(r => r.job.id), 'done', `${doneLabel} (combined)${splitNote}`);
+      // Provisional until the content script reports back — see pasteReport.
+      const label = willPaste ? `📤 Sending to ${providerLabel}` : `✅ Opened ${providerLabel}`;
+      await updateJobStatus(ids, 'done', `${label} (combined)${splitNote}${overflowNote}`);
+      if (willPaste) {
+        await pasteWatchAdd(ids[0], {
+          providerLabel, title, chunks: web.chunks, warn: '', overflowNote,
+          merged: web.merged, autoSubmit: !!settings.autoSubmit,
+          jobIds: ids, combined: true
+        });
+      }
       return;
     }
 
@@ -667,8 +822,13 @@ let jobWriteChain = Promise.resolve();
 
 // `jobId` may also be an array: combined mode drives several queue entries from
 // a single API call and they must all show the same progress.
+// @returns {Promise<boolean>} whether any queue row was actually found. The popup
+// prunes finished jobs from storage when it opens, so a long web run often has no
+// row left by the time its verdict arrives — the caller needs to know that to
+// decide whether the outcome would otherwise be visible nowhere.
 async function updateJobStatus(jobId, status, statusText) {
   const ids = Array.isArray(jobId) ? jobId : [jobId];
+  let found = false;
   jobWriteChain = jobWriteChain.then(async () => {
     const { jobs = [] } = await chrome.storage.local.get('jobs');
     let dirty = false;
@@ -681,9 +841,11 @@ async function updateJobStatus(jobId, status, statusText) {
       }
     }
     if (dirty) await chrome.storage.local.set({ jobs });
+    found = dirty;
   }).catch(e => console.warn('[YT Summarizer] job write failed:', e));
   await jobWriteChain;
   for (const id of ids) safePost({ type: 'jobUpdate', jobId: id, status, statusText });
+  return found;
 }
 
 function safePost(msg) {
@@ -708,6 +870,10 @@ async function addToHistory(url, title) {
 const PLAYLIST_MAX = 5000;
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'pasteReport' && msg.jobId != null) {
+    handlePasteReport(msg).catch(e => console.warn('[YT Summarizer] paste report failed:', e));
+    return; // fire and forget
+  }
   if (msg?.type === 'expandPlaylist') {
     expandPlaylist(msg.url)
       .then(sendResponse)

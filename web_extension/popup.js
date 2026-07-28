@@ -133,33 +133,35 @@ async function init() {
   if (ttsState) updateTTSStatus(ttsState);
   if (ttsLocalUrl) document.getElementById('tts-local-url').value = ttsLocalUrl;
   document.getElementById('web-delay').value = webDelay ?? 30;
-  setSplit(chunkParts ?? CONFIG.chunking.defaultParts);
+  setSplit(chunkParts ?? 1);
   setChip('chip-merge', !!chunkMerge);
 
-  if (transcriptLang) {
-    document.getElementById('transcript-lang-select').value = transcriptLang;
-    const inlineSel = document.getElementById('lang-select-inline');
-    if (inlineSel) inlineSel.value = transcriptLang;
-  }
+  const currentLang = transcriptLang || 'auto';
+  document.getElementById('transcript-lang-select').value = currentLang;
+  const inlineSel = document.getElementById('lang-select-inline');
+  if (inlineSel) inlineSel.value = currentLang;
 
-  const currentFmt = outputFormat || 'md';
+  const currentFmt = outputFormat || 'chat';
   const currentLen = summaryLength || 'normal';
-  const prompt = customPrompt || getPreset(transcriptLang || 'en', currentFmt, currentLen);
+  const prompt = customPrompt || getPreset(currentLang, currentFmt, currentLen);
   document.getElementById('prompt-input').value = prompt;
   updatePromptPreview(prompt);
 
   const savedProvider = stored.provider || 'anthropic';
   await applyProvider(savedProvider, apiKeys, models, stored.customEndpointUrl || '');
 
+  const currentAutoSubmit = autoSubmit ?? true;
+  const currentAutoPaste = autoPaste ?? true;
+
   setMode(mode || 'web');
-  setChip('chip-autopaste', !!autoPaste || !!autoSubmit);
-  setChip('chip-autosubmit', !!autoSubmit);
+  setChip('chip-autopaste', !!currentAutoPaste || !!currentAutoSubmit);
+  setChip('chip-autosubmit', !!currentAutoSubmit);
   setChip('chip-combine', !!combinedPrompt);
   setChip('chip-thinking', !!useThinking);
   setChip('chip-save-file', !!saveTranscriptFile);
   setOutputFormat(currentFmt);
   setSummaryLength(currentLen);
-  if (autoSubmit) document.getElementById('chip-autopaste').classList.add('locked');
+  if (currentAutoSubmit) document.getElementById('chip-autopaste').classList.add('locked');
 
   // ── Event listeners ───────────────────────────────────────────────────────
 

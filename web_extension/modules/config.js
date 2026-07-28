@@ -56,10 +56,43 @@ export const CONFIG = {
   // videos long enough that one request would truncate or lose detail.
   chunking: {
     maxParts:      10,     // upper bound for the UI / sanitizer
+    // Ceiling for the AUTOMATIC raise only (web mode, composer cap). It is
+    // deliberately higher than `maxParts`: the two limits exist for opposite
+    // reasons. `maxParts` caps what the user may *ask* for, to stop them paying
+    // for pointless extra requests. This one caps a raise the user did not ask
+    // for, whose whole purpose is to keep the video from being silently cut —
+    // holding it at 10 meant a video over ~5 h lost its tail no matter what.
+    // The cost is run length (each part waits for a full reply), which is why
+    // it is not unbounded; past this the overflow warning takes over.
+    maxAutoParts:  20,
     defaultParts:  1,      // 1 = disabled
-    // The only case where the requested number is not honoured: splitting a
-    // 3-minute video into 8 pieces would just be 8 pointless requests.
+    // The only case where the requested number is not honoured downwards:
+    // splitting a 3-minute video into 8 pieces would just be 8 pointless
+    // requests.
     minPartChars:  2000
+  },
+
+  // Web mode types each message into the provider's own composer, which has its
+  // own hard limit — far below the model's context. Gemini silently keeps the
+  // first 32 000 characters and drops the rest, so a "2 parts" split of a long
+  // video lost ~40% of it without a word anywhere. A value here raises the
+  // number of parts until every message fits; null means "no known limit, do
+  // not split on this account".
+  // Only measure-backed numbers belong here: a made-up cap costs the user extra
+  // round-trips for nothing.
+  // NOTE ON `null`: the lookup is `[provider] ?? default`, so an explicit `null`
+  // here falls through to `default`. The entries below are documentation of what
+  // was measured — if `default` ever becomes a number, revisit them.
+  maxWebMessageChars: {
+    // Measured 2026-07-27 by pasting 300 000 chars of fixed-width numbered lines
+    // into the live composer and reading the DOM back (nothing submitted).
+    gemini:    32000,   // truncates at EXACTLY 32 000 — cut mid-word at line 543/5085
+    openai:    null,    // no cap: 700 000 chars pasted back intact, all 11 865 lines
+    anthropic: null,    // no cap: a real Ctrl+V of 300 000 chars is converted into a
+                        // "PASTED" attachment instead of being truncated, and the
+                        // model reads it whole. The extension inserts text via
+                        // execCommand rather than pasting, so it stays plain text.
+    default:   null
   }
 };
 

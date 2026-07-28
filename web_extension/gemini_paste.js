@@ -17,6 +17,15 @@ ytsRunPaste({
     '.send-button',
     'button[type="submit"]',
   ],
+  // The model's own answers, read back so the merge request can carry the
+  // partial summaries as text instead of pointing at earlier turns.
+  replySelectors: [
+    'model-response message-content',
+    'message-content.model-response-text',
+    '.model-response-text',
+    'model-response .markdown',
+    '.markdown',
+  ],
   // Shown while Gemini is answering; used to pace a multi-part transcript.
   stopSelectors: [
     'button[aria-label*="Stop"]',

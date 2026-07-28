@@ -57,7 +57,9 @@ function trimTranscript(transcript, provider) {
  */
 export function splitTranscript(text, parts) {
   const src = String(text ?? '');
-  const n = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(parts) || 1));
+  // Clamped to the automatic ceiling, not the user-facing one: plannedChunkCount
+  // may legitimately hand us more than `maxParts` to keep a long video whole.
+  const n = Math.max(1, Math.min(CONFIG.chunking.maxAutoParts, Math.floor(parts) || 1));
   if (n === 1 || !src) return [src];
 
   const size = Math.ceil(src.length / n);
@@ -84,17 +86,38 @@ export function splitTranscript(text, parts) {
 }
 
 /**
- * How many parts this transcript is actually split into. The number the user
- * picked is honoured as-is — the only adjustment is downwards, when the
- * transcript is too short to fill that many parts.
+ * How many parts this transcript is actually split into.
+ *
+ * The number the user picked is adjusted down when the transcript is too short
+ * to fill that many parts, and up when a single part would not fit the target's
+ * per-message limit (`settings.maxMessageChars`, web mode only — a composer that
+ * truncates silently makes the user's choice actively harmful).
  * @returns {number} 1 when the transcript should be sent in a single request
  */
 export function plannedChunkCount(transcript, settings) {
   const asked = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
-  if (asked === 1) return 1;
-  const fits = Math.floor(String(transcript ?? '').length / CONFIG.chunking.minPartChars);
-  return Math.max(1, Math.min(asked, fits));
+  const len = String(transcript ?? '').length;
+
+  // Each message also carries the prompt and the "part i of n" note, so the
+  // budget for transcript text is smaller than the raw cap.
+  // `splitToFit` gates this: when the extension may not press Send, only part 1
+  // is ever pasted, so adding parts would drop text rather than rescue it.
+  const cap = settings?.splitToFit ? (Math.floor(settings?.maxMessageChars) || 0) : 0;
+  const overhead = String(settings?.prompt ?? '').length + CHUNK_NOTE_CHARS;
+  const needed = (cap > overhead && len > 0) ? Math.ceil(len / (cap - overhead)) : 1;
+
+  // `asked` is already capped at maxParts; only the automatic raise may go above
+  // it, and only as far as maxAutoParts.
+  const wanted = Math.min(CONFIG.chunking.maxAutoParts, Math.max(asked, needed));
+  if (wanted === 1) return 1;
+  const fits = Math.floor(len / CONFIG.chunking.minPartChars);
+  return Math.max(1, Math.min(wanted, fits));
 }
+
+// Worst-case length of the chunk instruction glued to each part, plus the two
+// `---` separators. Deliberately generous: overshooting costs a few characters
+// of headroom, undershooting brings back the silent truncation.
+const CHUNK_NOTE_CHARS = 500;
 
 /** The prompt sent with chunk `i` of `n` (1-based), in the transcript language. */
 export function chunkPrompt(basePrompt, i, n, lang) {
@@ -117,6 +140,33 @@ export function mergeApiPrompt(basePrompt, n, lang) {
 }
 
 /**
+ * Everything the content script needs to rebuild the merge message out of the
+ * partial answers it can read on the page, instead of asking the model to
+ * remember them.
+ *
+ * Why: a web chat does NOT reliably re-read its own distant turns. Observed
+ * 2026-07-27 on Gemini — four parts posted, four correct partial summaries, and
+ * a "summary of the whole video" that fused only parts 3 and 4 and never
+ * mentioned 1 and 2. Nothing was lost by the extension; the model simply
+ * ignored the older turns. API mode never had the problem because it hands the
+ * partials back as text (`mergeApiPrompt`), and this is what makes web mode do
+ * the same: the content script sees the DOM, so it can read the partial answers
+ * and paste them into the merge request.
+ *
+ * `at` is the index of the merge message in `parts`; if the replies cannot be
+ * read the message already sitting there ("merge the summaries above") stands.
+ */
+function mergePlanFor(settings, count, lang, cap) {
+  return {
+    at: count,                                   // parts = count chunks + merge
+    count,
+    head: mergeApiPrompt(settings.prompt, count, lang),
+    label: chunkNotes(lang).part,
+    cap: cap || 0
+  };
+}
+
+/**
  * The full sequence of messages a run produces: one per chunk, plus the merge
  * request when asked for. Web mode posts them into one conversation; API mode
  * uses the chunk messages and merges separately (it has the partials in hand).
@@ -124,14 +174,26 @@ export function mergeApiPrompt(basePrompt, n, lang) {
 export function buildChunkMessages(transcript, settings) {
   const lang = settings.transcriptLang || 'en';
   const n = plannedChunkCount(transcript, settings);
-  if (n === 1) return { parts: [`${settings.prompt}\n\n---\n\n${transcript}`], chunks: 1, merged: false };
+  const cap = Math.floor(settings?.maxMessageChars) || 0;
+  // Even at maxParts a very long video can stay over the composer's limit. The
+  // caller has to be able to say so instead of pretending the whole thing went.
+  const overflowOf = parts => cap ? parts.reduce((w, p) => Math.max(w, p.length - cap), 0) : 0;
+
+  if (n === 1) {
+    const parts = [`${settings.prompt}\n\n---\n\n${transcript}`];
+    return { parts, chunks: 1, merged: false, mergePlan: null, overflow: overflowOf(parts) };
+  }
 
   const slices = splitTranscript(transcript, n);
   const count = slices.length;
   const parts = slices.map((s, i) => `${chunkPrompt(settings.prompt, i + 1, count, lang)}\n\n---\n\n${s}`);
   const merged = !!settings.chunkMerge;
   if (merged) parts.push(mergeChatPrompt(count, lang));
-  return { parts, chunks: count, merged };
+  return {
+    parts, chunks: count, merged,
+    mergePlan: merged ? mergePlanFor(settings, count, lang, cap) : null,
+    overflow: overflowOf(parts)
+  };
 }
 
 function requireKey(apiKey, providerName) {
