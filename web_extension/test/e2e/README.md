@@ -60,7 +60,8 @@ Chrome e Firefox non condividono niente della ricetta qui sopra: su Gecko non es
 | `clear-retry.html` | §3.9: il retry che raddoppiava il messaggio. `ytsClearInput` sui tre editor veri, con il controllo che **senza** il clear il doppione c'è | no |
 | `clear-retry.mjs` | esegue il banco sopra; lancia da sé il browser. `node test/e2e/clear-retry.mjs [chrome\|firefox]` | **no** |
 | `upload-probe.mjs` | §4.4: allegare la trascrizione come **file** invece di incollarla. Cerca `input[type=file]` (shadow root inclusi), prova il drop simulato e `input.files = dt.files`. Profilo **persistente**: si fa login una volta. `node test/e2e/upload-probe.mjs [gemini\|anthropic\|openai]` | **no** |
-| `firefox-run.mjs` | §8.4: il giro a costo zero, `PROVIDER=gemini\|anthropic\|openai` | **no** |
+| `firefox-live.mjs` | **il giro dal vivo da usare oggi**: run vero dell'estensione vera in Firefox, senza passare dalla popup. `node test/e2e/firefox-live.mjs [gemini\|anthropic\|openai]`, `SUBMIT=1` per lo split forzato | **no** |
+| `firefox-run.mjs` | §8.4: il giro a costo zero via popup. ⚠️ **non funziona più da Firefox 153** — vedi sotto; sostituito da `firefox-live.mjs` | **no** |
 
 Avvio (l'estensione va caricata da `web-ext`, e `popup.html` **deve** essere aperta come
 start-url: BiDi si rifiuta di *navigare* verso `moz-extension://`):
@@ -76,9 +77,24 @@ EXT_UUID=<uuid> PROVIDER=anthropic node test/e2e/firefox-run.mjs
 L'`<uuid>` è quello **interno al profilo**, non l'id del manifest: sta in `prefs.js`
 sotto `extensions.webextensions.uuids`.
 
-**Due trappole già pagate.** BiDi ammette **una sola sessione per browser**: senza
-`session.end` il run dopo muore con `Maximum number of active sessions`. E `web-ext` non
-si attacca a un profilo senza `devtools.debugger.remote-enabled` in `user.js`.
+⚠️ **Da Firefox 153 questa ricetta non funziona più** (verificato il 2026-07-28). Il
+`--start-url moz-extension://…` **non apre più** la popup, e BiDi continua a rifiutarsi di
+navigarci (`Navigation to "moz-extension://…" is not allowed`): `browsingContext.getTree`
+riporta solo un `chrome://browser/content/blanktab.html` e non c'è modo di entrare. Provati
+e falliti anche `browser.startup.homepage` sul profilo (web-ext apre comunque una tab vuota)
+e la navigazione diretta via BiDi.
+
+**La via che funziona è `firefox-live.mjs`**: invece di pilotare la popup da fuori, innesta
+poche righe in una **copia usa-e-getta** dell'estensione che fanno partire il run **da dentro
+il background** — dove le API dell'estensione già ci sono — e riferiscono su HTTP a un
+collettore locale. Niente di privilegiato da raggiungere, e il repo non viene toccato.
+
+**Tre trappole già pagate.** BiDi ammette **una sola sessione per browser**: senza
+`session.end` il run dopo muore con `Maximum number of active sessions` — e uno script che
+va in errore **la lascia aperta**, quindi tocca riavviare Firefox. `web-ext` non si attacca
+a un profilo senza `devtools.debugger.remote-enabled` in `user.js`. E in Git Bash i percorsi
+`C:\...` vengono riscritti: usare gli slash normali o `MSYS_NO_PATHCONV=1`, altrimenti
+web-ext cerca l'estensione in `C:\ytsfx\ytsfx`.
 
 **Il trucco che rende quasi tutto gratuito:** con `autoSubmit: false` il content
 script incolla la parte 1 e si ferma. Claim, TTL, split, riga di stato, `pasteWatch`,
