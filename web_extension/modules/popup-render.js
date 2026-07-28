@@ -42,6 +42,7 @@ export function updateChipsForMode(mode) {
   document.getElementById('chip-autopaste').classList.toggle('hidden', mode !== 'web');
   document.getElementById('chip-autosubmit').classList.toggle('hidden', mode !== 'web');
   document.getElementById('chip-save-file').classList.toggle('hidden', mode !== 'web');
+  document.getElementById('chip-timestamps').classList.toggle('hidden', isTranscript);
   document.getElementById('chip-thinking').classList.toggle('hidden',
     mode !== 'api' || !info.supportsThinking);
   document.getElementById('split-select-inline').classList.toggle('hidden', isTranscript);
@@ -171,7 +172,7 @@ export async function setJobLength(id, len) {
   const job = state.jobs.find(j => j.id === id);
   if (!job) return;
   job.length = len;
-  const fmt = job.format ?? ([...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md');
+  const fmt = job.format ?? ([...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'chat');
   const { transcriptLang: globalLang } = await chrome.storage.local.get('transcriptLang');
   const effectiveLang = job.lang || globalLang || 'en';
   const preset = getPreset(effectiveLang, fmt, len);
@@ -214,7 +215,7 @@ export async function setJobLang(id, lang) {
   if (!job) return;
   job.lang = lang || null; // null means "use global"
   // Regenerate preset with the new lang
-  const fmt = job.format ?? ([...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md');
+  const fmt = job.format ?? ([...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'chat');
   const len = job.length ?? ([...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal');
   const { transcriptLang: globalLang } = await chrome.storage.local.get('transcriptLang');
   const effectiveLang = lang || globalLang || 'en';
@@ -244,7 +245,7 @@ export function renderJobs() {
 
   const mode = document.getElementById('mode-select').value;
   const isTranscript = mode === 'transcript';
-  const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
+  const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'chat';
   const globalLen = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
   const globalSplit = currentSplit();
   const dis = state.running ? 'disabled' : '';

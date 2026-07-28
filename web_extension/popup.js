@@ -87,7 +87,7 @@ async function init() {
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile',
     'outputFormat', 'summaryLength', 'jobs', 'running', 'theme',
     'ttsState', 'ttsRate', 'ttsVoice', 'ttsText', 'webDelay', 'ttsLocalUrl',
-    'chunkParts', 'chunkMerge'
+    'chunkParts', 'chunkMerge', 'includeTimestamps'
   ]);
 
   const {
@@ -95,7 +95,7 @@ async function init() {
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile,
     outputFormat, summaryLength, jobs: savedJobs, running: savedRunning, theme,
     ttsState, ttsRate, ttsVoice, ttsText, webDelay, ttsLocalUrl,
-    chunkParts, chunkMerge
+    chunkParts, chunkMerge, includeTimestamps
   } = stored;
 
   // Migrate legacy apiKey → apiKeys.anthropic
@@ -159,6 +159,7 @@ async function init() {
   setChip('chip-combine', !!combinedPrompt);
   setChip('chip-thinking', !!useThinking);
   setChip('chip-save-file', !!saveTranscriptFile);
+  setChip('chip-timestamps', includeTimestamps !== false);
   setOutputFormat(currentFmt);
   setSummaryLength(currentLen);
   if (currentAutoSubmit) document.getElementById('chip-autopaste').classList.add('locked');
@@ -238,7 +239,7 @@ async function init() {
       await chrome.storage.local.get(['outputFormat', 'summaryLength']);
     const { customPrompt } = await chrome.storage.local.get('customPrompt');
     // Only auto-update if not using a fully custom prompt
-    const preset = getPreset(lang, fmt || 'md', len || 'normal');
+    const preset = getPreset(lang, fmt || 'chat', len || 'normal');
     if (!customPrompt || isPreset(customPrompt)) {
       document.getElementById('prompt-input').value = preset;
       updatePromptPreview(preset);
@@ -254,7 +255,7 @@ async function init() {
     const { outputFormat: fmt, summaryLength: len } =
       await chrome.storage.local.get(['outputFormat', 'summaryLength']);
     const { customPrompt: currentPrompt } = await chrome.storage.local.get('customPrompt');
-    const preset = getPreset(lang, fmt || 'md', len || 'normal');
+    const preset = getPreset(lang, fmt || 'chat', len || 'normal');
     if (!currentPrompt || isPreset(currentPrompt)) {
       document.getElementById('prompt-input').value = preset;
       updatePromptPreview(preset);
@@ -344,7 +345,7 @@ async function init() {
       const len = chip.dataset.len;
       const { transcriptLang: lang, outputFormat: fmt } =
         await chrome.storage.local.get(['transcriptLang', 'outputFormat']);
-      const preset = getPreset(lang || 'en', fmt || 'md', len);
+      const preset = getPreset(lang || 'en', fmt || 'chat', len);
       const { customPrompt } = await chrome.storage.local.get('customPrompt');
       if (!customPrompt || isPreset(customPrompt)) {
         document.getElementById('prompt-input').value = preset;
@@ -740,14 +741,14 @@ async function startBatch() {
   const {
     models = {}, customEndpointUrl, transcriptLang, customPrompt, mode,
     useThinking, autoPaste, autoSubmit, combinedPrompt, saveTranscriptFile, webDelay: storedDelay,
-    chunkParts, chunkMerge
+    chunkParts, chunkMerge, includeTimestamps
   } = await chrome.storage.local.get([
     'models', 'customEndpointUrl', 'transcriptLang', 'customPrompt', 'mode',
     'useThinking', 'autoPaste', 'autoSubmit', 'combinedPrompt', 'saveTranscriptFile', 'webDelay',
-    'chunkParts', 'chunkMerge'
+    'chunkParts', 'chunkMerge', 'includeTimestamps'
   ]);
 
-  const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'md';
+  const globalFmt = [...document.querySelectorAll('.chip-fmt')].find(c => c.classList.contains('on'))?.dataset.fmt || 'chat';
   const globalLen = [...document.querySelectorAll('.chip-len')].find(c => c.classList.contains('on'))?.dataset.len || 'normal';
   const resolvedJobs = state.jobs.map(job => {
     if (job.prompt) return job;
@@ -816,7 +817,8 @@ async function startBatch() {
       saveTranscriptFile: !!saveTranscriptFile,
       webDelay: storedDelay ?? 30,
       chunkParts: chunkParts ?? CONFIG.chunking.defaultParts,
-      chunkMerge: !!chunkMerge
+      chunkMerge: !!chunkMerge,
+      includeTimestamps: includeTimestamps !== false
     }
   });
 }

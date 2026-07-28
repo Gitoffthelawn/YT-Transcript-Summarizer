@@ -222,6 +222,7 @@
     <button class="chip" id="chip-autopaste" data-cb="autopaste-cb" title="Automatically paste the transcript into the AI chat when the tab opens">📋 Auto-paste</button>
     <button class="chip" id="chip-autosubmit" data-cb="autosubmit-cb" title="Automatically submit the message after pasting (Auto-paste is required and will be enabled)">↵ Auto-submit</button>
     <button class="chip" id="chip-save-file" data-cb="save-file-cb" title="Save the raw transcript as a .txt file in your Downloads folder">💾 Save .txt</button>
+    <button class="chip" id="chip-timestamps" data-cb="timestamps-cb" title="Ask the model to cite [m:ss] timestamps next to each point (only when the transcript has them)">🕒 Timestamps</button>
     <button class="chip" id="chip-thinking" data-cb="thinking-cb" title="Enable extended reasoning mode (Claude API only — uses more tokens and time)">🧠 Thinking</button>
     <button class="chip" id="chip-combine" data-cb="combined-prompt-cb" title="Send all video transcripts as one combined message instead of one per video">📎 Combine all</button>
   </div>
@@ -243,6 +244,7 @@
 <input type="checkbox" id="autopaste-cb" style="display:none">
 <input type="checkbox" id="autosubmit-cb" style="display:none">
 <input type="checkbox" id="save-file-cb" style="display:none">
+<input type="checkbox" id="timestamps-cb" checked style="display:none">
 <input type="checkbox" id="combined-prompt-cb" style="display:none">
 <input type="checkbox" id="thinking-cb" style="display:none">
 <input type="checkbox" id="chunk-merge-cb" style="display:none">

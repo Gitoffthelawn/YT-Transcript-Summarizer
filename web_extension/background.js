@@ -329,10 +329,11 @@ async function processJob(job, settings) {
     }
     for (const n of notes) debugLog += `${n}\n`;
 
-    // Ask for timestamps only when the transcript actually carries them: the
+    // Ask for timestamps only when the transcript actually carries them (the
     // get_transcript fallback returns bare cue text, and promising anchors that
-    // are not there is how a model starts inventing them.
-    const timed = hasTimestamps(transcript);
+    // are not there is how a model starts inventing them) and the user has not
+    // opted out via the Timestamps chip.
+    const timed = hasTimestamps(transcript) && settings.includeTimestamps !== false;
     const jobSettingsTs = timed
       ? { ...jobSettings, prompt: `${jobSettings.prompt}\n\n${timestampNote(transcriptLang)}` }
       : jobSettings;
