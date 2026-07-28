@@ -1,0 +1,111 @@
+<!doctype html>
+<!--
+  The retry that used to double the message, on REAL editors.
+
+  ytsSendOne pastes again when it has not SEEN the text land within 15 s. Not
+  seeing it is not the same as it not being there: a chat page still mounting
+  under a 100 kB paste shows it late, and the retry stacked a second copy under
+  the first — one message carrying the prompt and the whole transcript twice.
+  The fix is ytsClearInput() before the second attempt.
+
+  paste-retry.test.mjs covers the decision (does the retry clear first?) but has
+  to stub Selection and execCommand, which is exactly the machinery a clear
+  depends on. This page runs it on the three editor archetypes for real:
+
+    A  quill  — plain contenteditable, nothing intercepts paste  (Gemini)
+    B  pm     — editor that intercepts paste and inserts it itself (Claude/ChatGPT)
+    C  area   — plain <textarea>                                  (fallback)
+
+  Case 3 in each block is the control: WITHOUT the clear the text really is
+  doubled, so a passing case 2 means the clear did the work — not that the
+  editor happened to be empty anyway.
+
+  Loads the REAL paste_common.js. No account, no network, nothing sent.
+-->
+<meta charset="utf-8">
+<title>ytsClearInput / retry double-paste</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1.5rem; }
+  .editor { border: 1px solid #999; min-height: 2.5em; padding: .5em; margin: .4em 0 1rem; white-space: pre-wrap; overflow: hidden; max-height: 4em; }
+  pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; }
+  .pass { color: #0a7; } .fail { color: #c00; font-weight: 700; }
+</style>
+
+<h1>ytsClearInput on a real DOM</h1>
+
+<h2>A — quill-like (no interception)</h2>
+<div id="quill" class="editor ql-editor" contenteditable="true"></div>
+
+<h2>B — ProseMirror-like (intercepts paste)</h2>
+<div id="pm" class="editor" contenteditable="true"></div>
+
+<h2>C — textarea</h2>
+<textarea id="area" class="editor"></textarea>
+
+<h2>Results</h2>
+<pre id="out">running…</pre>
+
+<script src="../../paste_common.js"></script>
+<script>
+(() => {
+  // B behaves like a real rich-text editor: it takes the paste over itself.
+  const pm = document.getElementById('pm');
+  pm.addEventListener('paste', (e) => {
+    e.preventDefault();
+    pm.textContent += e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+  });
+
+  const read = (el) => (el.tagName === 'TEXTAREA') ? el.value : el.innerText;
+  const SAMPLE = 'Riassumi il video.\n\n---\n\n' + 'trascrizione '.repeat(150);
+  const MARK = 'Riassumi il video.';
+  const count = (hay, needle) => hay.split(needle).length - 1;
+
+  const results = [];
+  const add = (name, ok, detail) => results.push({ case: name, ok, detail });
+
+  for (const id of ['quill', 'pm', 'area']) {
+    const el = document.getElementById(id);
+
+    // 1 — a clear really empties the editor, whichever kind it is
+    el.focus();
+    ytsPasteText(el, SAMPLE);
+    const before = read(el).length;
+    ytsClearInput(el);
+    const after = read(el).trim().length;
+    add(`${id}: clear empties the editor`, before > 0 && after === 0,
+        `${before} chars → ${after}`);
+
+    // 2 — the retry sequence: paste, clear, paste again → ONE copy
+    el.focus();
+    ytsPasteText(el, SAMPLE);
+    ytsClearInput(el);
+    el.focus();
+    ytsPasteText(el, SAMPLE);
+    const copies = count(read(el), MARK);
+    add(`${id}: retry after a clear leaves one copy`, copies === 1, `${copies} copies`);
+
+    // 3 — control: no clear, and the doubling is real
+    ytsClearInput(el);
+    el.focus();
+    ytsPasteText(el, SAMPLE);
+    ytsPasteText(el, SAMPLE);
+    const doubled = count(read(el), MARK);
+    add(`${id}: without a clear it really would double`, doubled === 2, `${doubled} copies`);
+
+    ytsClearInput(el);
+  }
+
+  // A clear on nothing must not throw — ytsSendOne calls it before it is sure
+  // an editor is even there.
+  let threw = null;
+  try { ytsClearInput(null); ytsClearInput(document.getElementById('nope')); }
+  catch (e) { threw = String(e); }
+  add('clearing a missing editor is a no-op', threw === null, threw || 'no throw');
+
+  const payload = { results, ok: results.every(r => r.ok), userAgent: navigator.userAgent };
+  window.__ytsResults = payload;
+  document.getElementById('out').innerHTML = results
+    .map(r => `<span class="${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'}</span>  ${r.case} — ${r.detail}`)
+    .join('\n') + `\n\n${payload.ok ? 'all green' : 'FAILURES'}\n${navigator.userAgent}`;
+})();
+</script>

@@ -214,6 +214,10 @@
       <option value="10">✂️ 10 parts</option>
     </select>
     <button class="chip hidden" id="chip-merge" data-cb="chunk-merge-cb" title="After the last part, ask for one more answer that fuses the partial summaries into a single summary">🧩 Merge parts</button>
+    <!-- Gemini truncates a message at 32 000 characters, so a long transcript is
+         split whether or not the user asked for it. Saying so only in the status
+         line, once the tab is already open, made "1 part" look like a lie. -->
+    <span class="split-cap-note hidden" id="split-cap-note"></span>
     <span class="chips-sep"></span>
     <button class="chip" id="chip-autopaste" data-cb="autopaste-cb" title="Automatically paste the transcript into the AI chat when the tab opens">📋 Auto-paste</button>
     <button class="chip" id="chip-autosubmit" data-cb="autosubmit-cb" title="Automatically submit the message after pasting (Auto-paste is required and will be enabled)">↵ Auto-submit</button>

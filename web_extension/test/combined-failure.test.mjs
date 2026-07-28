@@ -61,15 +61,32 @@ check('no row was left on the provisional label',
   rows.some(r => r.statusText?.startsWith('📤')), false);
 // Three rows, one batch, one thing that went wrong: three toasts would be noise.
 check('exactly ONE notification for the whole batch', notifications.length, 1);
-check('the watch entry is consumed', Object.keys(store.pasteWatch ?? {}).length, 0);
+// A FAILED verdict is not final: the status line itself says "reload the tab to
+// retry", the payload is still in storage for exactly that, and the retry
+// reports under the same job id. Consuming the entry here — which is what the
+// code used to do — threw that second report away, so a run that had actually
+// succeeded stayed ❌ for good. The entry now leaves on success or via the 6 h
+// cleanup, never on a failure.
+check('the watch entry survives a failure, so a retry can still be heard',
+  Object.keys(store.pasteWatch ?? {}).length, 1);
 
-// ── A second report for the same batch must be a no-op ───────────────────────
-// (a reloaded tab re-claiming the payload would otherwise re-write the verdict)
+// ── The retry lands: the verdict must be corrected, not ignored ──────────────
 notifications.length = 0;
 sendMessage({ type: 'pasteReport', jobId: 'a', ok: true, sent: 9, total: 9 });
 for (let i = 0; i < 80; i++) await new Promise(r => setImmediate(r));
-check('a duplicate report cannot resurrect the batch as a success',
-  store.jobs.every(r => r.status === 'error'), true);
+check('a successful retry clears the error on every row',
+  store.jobs.every(r => r.status === 'done'), true);
+check('the corrected verdict reaches all three rows',
+  store.jobs.every(r => r.statusText?.startsWith('✅ Sent to Gemini (combined)')), true);
+check('success consumes the entry', Object.keys(store.pasteWatch ?? {}).length, 0);
+
+// ...and now that it is consumed, anything further really is a no-op: a tab
+// left open days later cannot rewrite a finished job.
+notifications.length = 0;
+sendMessage({ type: 'pasteReport', jobId: 'a', ok: false, sent: 0, total: 9 });
+for (let i = 0; i < 80; i++) await new Promise(r => setImmediate(r));
+check('a report after the verdict is consumed changes nothing',
+  store.jobs.every(r => r.status === 'done'), true);
 check('and it notifies nobody', notifications.length, 0);
 
 finish();

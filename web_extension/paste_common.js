@@ -9,6 +9,12 @@
 // later.
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
+// A payload that no tab managed to paste is worth exactly one more try (the
+// status line tells the user to reload). Past that it is only a hazard: every
+// later visit to the provider would replay a transcript the user has moved on
+// from.
+const PENDING_MAX_ATTEMPTS = 2;
+
 function ytsSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
@@ -32,6 +38,16 @@ async function ytsClaimPending() {
   if (pendingLLMContent.claimedBy && Date.now() - (pendingLLMContent.claimedAt || 0) < 60000) {
     return null; // another tab is already handling it
   }
+  // A payload written AFTER this document started belongs to a tab that has not
+  // opened yet — the background writes it and only then calls tabs.create. In a
+  // web batch the next video overwrites the key while the previous chat tab is
+  // still booting, and that tab would cheerfully paste the wrong video's
+  // transcript and report it under the wrong job. The same rule keeps a
+  // provider tab the user opened by hand out of a run it has nothing to do with.
+  const startedAt = (typeof performance !== 'undefined' && performance.timeOrigin) || 0;
+  if (startedAt && pendingLLMContent.ts > startedAt) {
+    return null;
+  }
 
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await chrome.storage.local.set({
@@ -51,8 +67,15 @@ async function ytsReleasePending(consumed) {
   // Hand it back so the next attempt (a reload, or another tab) can pick it up.
   const { pendingLLMContent } = await chrome.storage.local.get('pendingLLMContent');
   if (!pendingLLMContent) return;
-  const { claimedBy, claimedAt, ...rest } = pendingLLMContent;
-  await chrome.storage.local.set({ pendingLLMContent: rest });
+  const { claimedBy, claimedAt, attempts, ...rest } = pendingLLMContent;
+  const used = (attempts || 0) + 1;
+  // Retrying forever is how a payload nobody wants any more ends up pasted into
+  // an unrelated conversation. One retry, then it goes.
+  if (used >= PENDING_MAX_ATTEMPTS) {
+    await chrome.storage.local.remove('pendingLLMContent');
+    return;
+  }
+  await chrome.storage.local.set({ pendingLLMContent: { ...rest, attempts: used } });
 }
 
 function ytsWaitForInput(selectors, timeoutMs) {
@@ -112,6 +135,34 @@ function ytsPasteText(el, text) {
     }
   } catch (_) {}
   return false;
+}
+
+/**
+ * Empty the composer. Used before a second paste attempt: the first one may have
+ * been slow rather than lost, and stacking a retry on top of it produces one
+ * message carrying the prompt and the transcript twice.
+ */
+function ytsClearInput(el) {
+  if (!el) return;
+  try {
+    if ('value' in el && typeof el.value === 'string') {
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+  } catch (_) {}
+  // contenteditable: select the whole editor and delete through the framework,
+  // so ProseMirror/Lexical update their own model instead of being written over.
+  try {
+    el.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    if (!document.execCommand('delete')) el.textContent = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch (_) {}
 }
 
 function ytsReadInput(el) {
@@ -356,10 +407,19 @@ async function ytsSendOne(cfg, text, autoSubmit) {
   // there now" only means something against what was there before.
   const baseline = ytsCountAttachments(cfg);
 
-  // Two attempts: a paste into a half-mounted editor can be swallowed outright,
-  // and re-pasting is harmless once we know nothing landed.
+  // Two attempts: a paste into a half-mounted editor can be swallowed outright.
+  // The retry is NOT free, though: "we did not see it land in 15 s" is not the
+  // same as "nothing landed", and a first paste that was merely slow would be
+  // stacked under a second copy — one message carrying the prompt and the whole
+  // transcript twice. So before pasting again, look once more, then wipe.
   let landed = null;
   for (let attempt = 0; attempt < 2 && !landed; attempt++) {
+    if (attempt > 0) {
+      landed = await ytsWaitForLanded(cfg, input, text, baseline, 2500);
+      if (landed) break;
+      ytsClearInput(input);
+      await ytsSleep(300);
+    }
     input.focus();
     await ytsSleep(400);
     ytsPasteText(input, text);
@@ -452,8 +512,15 @@ async function ytsRunPaste(cfg) {
       // that can happen is the paste, so landing IS the success condition.
       const ok = pending.autoSubmit ? res.submitted : res.landed;
       if (!ok) {
-        // Nothing sent at all: leave the payload in storage so a reload retries.
-        if (i === 0) return;
+        if (i === 0) {
+          // Leave the payload for a reload ONLY when nothing reached the editor.
+          // If the text is sitting in the composer, "not submitted" may simply
+          // mean we could not tell — the message may well have gone out. Replaying
+          // it then posts the same transcript twice, which is a worse failure than
+          // the one being recovered from; the user can press Enter themselves.
+          consumed = res.landed;
+          return;
+        }
         console.warn(`[YT Summarizer] stopped after part ${i}/${parts.length}`);
         break;
       }

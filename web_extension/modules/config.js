@@ -146,6 +146,25 @@ export function chunkNotes(lang) {
   return CHUNK_NOTES[lang] || CHUNK_NOTES.en;
 }
 
+// The transcript carries `[m:ss]` anchors every half minute, but a model only
+// uses them if it is told to. Deliberately NOT folded into PROMPTS: `isPreset()`
+// compares a stored prompt against those strings to decide whether it may still
+// be auto-updated, so editing a preset would quietly turn every existing user's
+// prompt into a "custom" one, frozen forever. This is appended at send time
+// instead, and only when the transcript really has anchors.
+export const TIMESTAMP_NOTES = {
+  en: 'The transcript is marked with [m:ss] timestamps. Cite the relevant one in square brackets next to each point you make, copied exactly as it appears.',
+  it: 'La trascrizione è marcata con timestamp [m:ss]. Cita quello pertinente tra parentesi quadre accanto a ogni punto, copiandolo esattamente come appare.',
+  es: 'La transcripción está marcada con marcas de tiempo [m:ss]. Cita la correspondiente entre corchetes junto a cada punto, copiándola exactamente como aparece.',
+  fr: 'La transcription est marquée avec des horodatages [m:ss]. Cite celui qui convient entre crochets à côté de chaque point, copié exactement tel quel.',
+  de: 'Das Transkript ist mit [m:ss]-Zeitstempeln versehen. Nenne den passenden in eckigen Klammern neben jedem Punkt, exakt so kopiert, wie er dasteht.',
+  pt: 'A transcrição está marcada com carimbos de tempo [m:ss]. Cite o relevante entre colchetes ao lado de cada ponto, copiado exatamente como aparece.',
+};
+
+export function timestampNote(lang) {
+  return TIMESTAMP_NOTES[lang] || TIMESTAMP_NOTES.en;
+}
+
 // ── Providers & Models ─────────────────────────────────────────────────────────
 // HOW TO ADD A PROVIDER:
 //   1. Add a new key below with the required fields.

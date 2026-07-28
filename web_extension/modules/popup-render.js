@@ -1,6 +1,6 @@
 import { state } from './popup-state.js';
 import { escHtml } from './ui-utils.js';
-import { getPreset, isPreset, PROVIDERS } from './config.js';
+import { CONFIG, getPreset, isPreset, PROVIDERS } from './config.js';
 
 function shortUrl(url) {
   try {
@@ -46,6 +46,7 @@ export function updateChipsForMode(mode) {
     mode !== 'api' || !info.supportsThinking);
   document.getElementById('split-select-inline').classList.toggle('hidden', isTranscript);
   refreshMergeChip();
+  refreshSplitCapNote();
   document.getElementById('chip-fmt-chat').classList.toggle('hidden', isTranscript);
   document.getElementById('chip-fmt-md').classList.toggle('hidden', isTranscript);
   document.getElementById('chip-len-short').classList.toggle('hidden', isTranscript);
@@ -86,6 +87,7 @@ export function setSplit(parts) {
   const n = SPLIT_CHOICES.includes(parts) ? parts : 1;
   document.getElementById('split-select-inline').value = String(n);
   refreshMergeChip();
+  refreshSplitCapNote();
 }
 
 // "Merge parts" only means something once there is more than one part, and
@@ -93,6 +95,37 @@ export function setSplit(parts) {
 function refreshMergeChip() {
   const isTranscript = document.getElementById('mode-select').value === 'transcript';
   document.getElementById('chip-merge').classList.toggle('hidden', isTranscript || currentSplit() === 1);
+}
+
+/**
+ * The number of parts is not always the user's to decide: the provider's own
+ * composer has a hard character limit (Gemini truncates at exactly 32 000, in
+ * silence), so a long transcript is split whatever the selector says — and the
+ * merge that follows is not optional either, because "1 part" means "one
+ * summary". That used to surface only in the status line, after the chat tab was
+ * already open, which made a correct rescue look like a broken promise.
+ *
+ * Only shown when it can actually happen: web mode, auto-submit on (without it
+ * the extension may not send the follow-up parts and never splits), and a
+ * provider with a measured cap.
+ */
+export function refreshSplitCapNote() {
+  const el = document.getElementById('split-cap-note');
+  if (!el) return;
+  const mode = document.getElementById('mode-select').value;
+  const autoSubmit = document.getElementById('autosubmit-cb')?.checked;
+  const caps = CONFIG.maxWebMessageChars;
+  const cap = caps[state.currentProvider] ?? caps.default;
+
+  const applies = mode === 'web' && autoSubmit && !!cap;
+  el.classList.toggle('hidden', !applies);
+  if (!applies) { el.textContent = ''; return; }
+
+  const label = (PROVIDERS[state.currentProvider] || {}).name || state.currentProvider;
+  el.textContent = currentSplit() === 1
+    ? `⚠️ ${label} caps a message at ${Math.round(cap / 1000)}k chars: a longer transcript is split automatically, then merged.`
+    : `⚠️ ${label} caps a message at ${Math.round(cap / 1000)}k chars: more parts may be added if needed.`;
+  el.title = el.textContent;
 }
 
 // ── Per-job settings ──────────────────────────────────────────────────────────

@@ -87,6 +87,46 @@ check('huge: overflow is a sane number', w.overflow, w.longest - GEMINI);
 w = build(T, { asked: 99, cap: null, autoSubmit: false });
 check('asked 99 is clamped to maxParts', w.chunks, CONFIG.chunking.maxParts);
 
+// ── the split nobody asked for ─────────────────────────────────────────────
+// Picking "1 part" on a long video does NOT produce one message on Gemini: the
+// composer would truncate it, so the split is forced. Two things follow, and
+// both used to be wrong.
+w = build(T, { asked: 1, cap: GEMINI, autoSubmit: true });
+console.log(`\n  asked 1 → ${w.chunks} parts, ${w.parts.length} messages, auto ${w.autoSplit}`);
+check('a forced split is flagged as automatic', w.autoSplit, true);
+check('what the user asked for is preserved', w.asked, 1);
+// "1 part" means "one summary". Leaving N partial summaries and no whole one
+// answers a question nobody asked.
+check('asked 1 ⇒ the merge is not optional', w.merged, true);
+check('forced split appends exactly one merge message', w.parts.length, w.chunks + 1);
+check('forced split builds the plan the content script needs', w.mergePlan?.count, w.chunks);
+
+// The merge chip is HIDDEN at "1 part", so whatever it holds is left over from
+// an earlier setting. It must not get a vote — that stale `false` used to strip
+// the merge off a run the user could not even see the checkbox for.
+w = build(T, { asked: 1, cap: GEMINI, autoSubmit: true, merge: false });
+check('a stale merge=false cannot strip the merge off a forced split', w.merged, true);
+
+// A deliberate split is the user's call, in both directions.
+w = build(T, { asked: 4, cap: GEMINI, autoSubmit: true, merge: false });
+check('asked 4 + merge off → no merge', w.merged, false);
+check('asked 4 + merge off → no extra message', w.parts.length, w.chunks);
+check('asked 4 + merge off → no plan', w.mergePlan, null);
+w = build(T, { asked: 4, cap: GEMINI, autoSubmit: true, merge: true });
+check('asked 4 + merge on → merge', w.merged, true);
+
+// Raised beyond the request is still automatic; landing exactly on it is not.
+w = build(SIX_HOURS, { asked: 4, cap: GEMINI, autoSubmit: true, merge: true });
+check('raised above the asked count is flagged automatic', w.autoSplit, true);
+w = build(T, { asked: 4, cap: null, autoSubmit: true, merge: true });
+check('a split that came out as asked is not automatic', w.autoSplit, false);
+
+// A transcript that fits is untouched by all of this — no phantom merge message.
+w = build(6000, { asked: 1, cap: GEMINI, autoSubmit: true, merge: true });
+check('short transcript → one message', w.parts.length, 1);
+check('short transcript → nothing automatic', w.autoSplit, false);
+check('short transcript → no merge, whatever the checkbox says', w.merged, false);
+
 // ── no text may ever be lost when the cap is honoured ───────────────────────
 const src = transcript(T);
 w = build(T, { asked: 2, cap: GEMINI, autoSubmit: true });

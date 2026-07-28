@@ -4,7 +4,7 @@ import { state } from './modules/popup-state.js';
 import { renderHistory, clearHistory } from './modules/popup-history.js';
 import { populateTTSVoices, sendTTS, ttsPlay, ttsPauseResume, ttsStop, updateTTSStatus } from './modules/popup-tts.js';
 import { applyProvider, persistSettings, saveSettings, updatePromptPreview, togglePromptEditor } from './modules/popup-settings.js';
-import { renderJobs, updateJob, setUIAsRunning, setUIAsStopped, setMode, setChip, setOutputFormat, setSummaryLength, toggleJobSettings, updateJobEditBtn, setJobFormat, setJobLength, resetJobSettings, setJobLang, setJobSplit, setSplit } from './modules/popup-render.js';
+import { renderJobs, updateJob, setUIAsRunning, setUIAsStopped, setMode, setChip, setOutputFormat, setSummaryLength, toggleJobSettings, updateJobEditBtn, setJobFormat, setJobLength, resetJobSettings, setJobLang, setJobSplit, setSplit, refreshSplitCapNote } from './modules/popup-render.js';
 
 const PANELS = ['panel-settings', 'panel-history', 'panel-tts'];
 
@@ -162,6 +162,9 @@ async function init() {
   setOutputFormat(currentFmt);
   setSummaryLength(currentLen);
   if (currentAutoSubmit) document.getElementById('chip-autopaste').classList.add('locked');
+  // Last, deliberately: the note depends on the provider, the mode AND the
+  // auto-submit chip, and all three are only settled by this point.
+  refreshSplitCapNote();
 
   // ── Event listeners ───────────────────────────────────────────────────────
 
@@ -311,6 +314,8 @@ async function init() {
         } else {
           document.getElementById('chip-autopaste').classList.remove('locked');
         }
+        // The composer cap only forces extra parts when we may press Send.
+        refreshSplitCapNote();
       }
       persistSettings();
     });

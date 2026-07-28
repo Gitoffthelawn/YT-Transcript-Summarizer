@@ -1,7 +1,8 @@
 // ── background.js — Service Worker ───────────────────────────────────────────
 import { callLLM, splitTranscript, plannedChunkCount, chunkPrompt, chunkHeading, mergeApiPrompt, buildChunkMessages } from './modules/llm-api.js';
 import { fetchViaAndroidPlayer, fetchViaGetTranscript, tabFetchTranscript, tabBrowseContinuations } from './modules/youtube-api.js';
-import { CONFIG } from './modules/config.js';
+import { CONFIG, timestampNote } from './modules/config.js';
+import { hasTimestamps } from './modules/transcript-parse.js';
 import { sleep, fetchWithTimeout } from './modules/utils.js';
 import { downloadText, safeFilename, ensureOffscreenDocument } from './modules/downloads.js';
 
@@ -328,6 +329,14 @@ async function processJob(job, settings) {
     }
     for (const n of notes) debugLog += `${n}\n`;
 
+    // Ask for timestamps only when the transcript actually carries them: the
+    // get_transcript fallback returns bare cue text, and promising anchors that
+    // are not there is how a model starts inventing them.
+    const timed = hasTimestamps(transcript);
+    const jobSettingsTs = timed
+      ? { ...jobSettings, prompt: `${jobSettings.prompt}\n\n${timestampNote(transcriptLang)}` }
+      : jobSettings;
+
     const displayTitle = title || videoId;
     safePost({ type: 'jobTitleUpdate', jobId: job.id, title: displayTitle });
     const mode = settings.mode || 'web';
@@ -357,7 +366,7 @@ async function processJob(job, settings) {
       // sees the whole video without any single message being enormous.
       // `maxMessageChars` is what keeps a part inside the composer's own limit;
       // it can only be acted on when we are allowed to send the follow-up parts.
-      const web = buildChunkMessages(transcript, webChunkSettings(jobSettings, provider, settings.autoSubmit));
+      const web = buildChunkMessages(transcript, webChunkSettings(jobSettingsTs, provider, settings.autoSubmit));
 
       if (settings.saveTranscriptFile) {
         await saveWebParts(web.parts, displayTitle, videoId);
@@ -368,7 +377,7 @@ async function processJob(job, settings) {
       }
       await chrome.tabs.create({ url: webUrl, active: true });
 
-      const splitNote = webSplitNote(web, settings);
+      const splitNote = webSplitNote(web, settings, providerLabel);
       const overflowNote = webOverflowNote(web, providerLabel);
       await addToHistory(job.url, displayTitle);
       // Only the content script knows whether the text actually landed, so the
@@ -381,7 +390,7 @@ async function processJob(job, settings) {
       if (willPaste) {
         await pasteWatchAdd(job.id, {
           providerLabel, title: displayTitle, chunks: web.chunks, warn, overflowNote,
-          merged: web.merged, autoSubmit: !!settings.autoSubmit
+          merged: web.merged, autoSplit: web.autoSplit, autoSubmit: !!settings.autoSubmit
         });
       }
       return;
@@ -393,7 +402,7 @@ async function processJob(job, settings) {
 
     let llm;
     try {
-      llm = await summarizeTranscript(transcript, jobSettings, job.id, (m) => { debugLog += m; }, `🤖 ${providerName}`);
+      llm = await summarizeTranscript(transcript, jobSettingsTs, job.id, (m) => { debugLog += m; }, `🤖 ${providerName}`);
     } catch (llmErr) {
       // Keep the per-video debug dump the API path has always produced, but
       // never let a failed dump replace the real error message.
@@ -415,7 +424,7 @@ async function processJob(job, settings) {
     }
 
     const banner = notes.length ? `> ${notes.join('\n> ')}\n\n` : '';
-    const mdContent = `# ${displayTitle}\n\n${banner}${llm.summary}`;
+    const mdContent = `# ${displayTitle}\n\n${banner}${linkTimestamps(llm.summary, videoId)}`;
     await downloadText(mdContent, safeFilename(displayTitle, videoId, { ext: 'md' }), 'text/markdown;charset=utf-8');
 
     await addToHistory(job.url, displayTitle);
@@ -433,6 +442,27 @@ async function processJob(job, settings) {
   }
 }
 
+/**
+ * Turn the `[m:ss]` anchors the model copied out of the transcript into links
+ * that actually jump to that moment. Pure post-processing on the .md: the model
+ * is never asked to write a URL, which it would get wrong.
+ *
+ * Deliberately not applied in combined mode — with several videos in one
+ * transcript there is no way to tell which one a timestamp belongs to, and a
+ * link to the wrong video is worse than no link.
+ *
+ * The `(?!\()` guard is the one that matters: without it a model that already
+ * wrote `[1:23](url)` would come out as `[1:23](url)(url)`.
+ */
+function linkTimestamps(md, videoId) {
+  if (!videoId || !md) return md;
+  return String(md).replace(/\[(\d{1,2}):([0-5]\d)(?::([0-5]\d))?\](?!\()/g, (whole, a, b, c) => {
+    const [h, m, s] = c !== undefined ? [+a, +b, +c] : [0, +a, +b];
+    const at = h * 3600 + m * 60 + s;
+    return `[${whole.slice(1, -1)}](https://www.youtube.com/watch?v=${videoId}&t=${at}s)`;
+  });
+}
+
 function providerLabelOf(provider) {
   return provider === 'anthropic' ? 'Claude.ai'
        : provider === 'openai'    ? 'ChatGPT'
@@ -447,6 +477,7 @@ function providerLabelOf(provider) {
 // surprise paste.
 async function setPendingLLMContent(parts, autoSubmit, jobId = null, mergePlan = null) {
   const list = Array.isArray(parts) ? parts : [parts];
+  await dropOrphanPending(jobId);
   await chrome.storage.local.set({
     // `text` stays for the single-message case so nothing else has to care.
     // `jobId` travels with the payload so the content script can report the
@@ -455,6 +486,36 @@ async function setPendingLLMContent(parts, autoSubmit, jobId = null, mergePlan =
     // partial answers it can read on the page (see mergePlanFor in llm-api.js).
     pendingLLMContent: { parts: list, text: list[0], autoSubmit, jobId, merge: mergePlan, ts: Date.now() }
   });
+}
+
+/**
+ * There is one pending payload for the whole browser, so the next video in a web
+ * batch overwrites the previous one. `webDelay` (30 s by default) is usually
+ * enough for the chat tab to have claimed it — but a cold Gemini tab can take
+ * longer, and then the payload is simply gone: nothing is ever pasted for that
+ * video and its row sits at "📤 Sending" forever.
+ *
+ * The transcript cannot be rescued (the new video's turn has come), but the
+ * silence can: close the abandoned job honestly instead of leaving it hanging.
+ */
+async function dropOrphanPending(newJobId) {
+  const { pendingLLMContent } = await chrome.storage.local.get('pendingLLMContent');
+  const orphan = pendingLLMContent?.jobId;
+  if (orphan == null || orphan === newJobId) return;
+  // A claimed payload is already in a content script's hands: it works from its
+  // own copy from here on, so overwriting the storage key costs it nothing and
+  // declaring it failed would be a lie (its report is still coming).
+  if (pendingLLMContent.claimedBy) return;
+
+  const info = await pasteWatchTake(orphan);
+  if (!info) return;
+  // Covers both shapes of the same outcome: a tab that never claimed it, and one
+  // that claimed it, failed, and handed it back for a retry that can no longer
+  // happen. In either case this video's text is not going anywhere, and the
+  // previous status ("reload the tab to retry") would now be bad advice.
+  const title = String(info.title || '').slice(0, 35);
+  await updateJobStatus(info.jobIds || orphan, 'error',
+    `❌ ${info.providerLabel} never received this transcript — the next video's turn came first: ${title}`);
 }
 
 // Jobs whose status is still provisional, waiting for the content script's
@@ -481,12 +542,24 @@ async function pasteWatchTake(jobId) {
 }
 
 /**
+ * Look at the watch entry without consuming it. A FAILED paste can still be
+ * retried (the status line says "reload the tab to retry"), and the retry sends
+ * a second report under the same job id — which the old take-on-first-report
+ * dropped on the floor, leaving a job that had actually succeeded marked ❌
+ * forever. So the entry only leaves on success, or via the 6 h cleanup.
+ */
+async function pasteWatchPeek(jobId) {
+  const { pasteWatch = {} } = await chrome.storage.local.get('pasteWatch');
+  return pasteWatch[jobId] || null;
+}
+
+/**
  * The content script telling us what actually happened in the chat tab. Web mode
  * used to declare "✅ Sent" the moment the tab was created, which was a lie
  * whenever the paste failed or stopped halfway through a split transcript.
  */
 async function handlePasteReport(msg) {
-  const info = await pasteWatchTake(msg.jobId);
+  const info = await pasteWatchPeek(msg.jobId);
   if (!info) return;
 
   const { providerLabel, title, warn = '', overflowNote = '' } = info;
@@ -509,7 +582,8 @@ async function handlePasteReport(msg) {
       const note = parts > 1 ? ` (✂️ part 1 of ${parts} — auto-submit off)` : '';
       text = `✅ Pasted into ${providerLabel}${scope}${note}${tail}`;
     } else {
-      const note = parts > 1 ? ` (✂️ ${parts} parts${info.merged ? ' + merge' : ''})` : '';
+      const why = info.autoSplit ? ` — over ${providerLabel}'s message limit` : '';
+      const note = parts > 1 ? ` (✂️ ${parts} parts${why}${info.merged ? ' + merge' : ''})` : '';
       // The merge message normally carries the partial answers back as text. When
       // the content script could not read them off the page it falls back to
       // "merge the summaries above" — which is exactly the case where the model
@@ -531,6 +605,11 @@ async function handlePasteReport(msg) {
     status = 'error';
     text = `❌ Paste into ${providerLabel}${scope} failed — reload the tab to retry${tail}`;
   }
+  // A failure is not the end of the story — the payload may still be in storage
+  // and a reload retries it — so the entry stays until it either succeeds or is
+  // aged out. Keeping it is what lets a successful retry correct the ❌.
+  if (status === 'done') await pasteWatchTake(msg.jobId);
+
   // Combined mode drives several queue rows from one paste sequence.
   const rowUpdated = await updateJobStatus(info.jobIds || msg.jobId, status, text);
 
@@ -572,10 +651,15 @@ async function saveWebParts(parts, displayTitle, videoId) {
 
 // Web mode can't send the follow-up parts unless it is allowed to press Send —
 // say so in the status line instead of silently dropping most of the video.
-function webSplitNote(web, settings) {
+//
+// When the split was NOT the user's idea (the composer would have truncated the
+// message) the reason has to travel with the number: "✂️ 7 parts" under a
+// selector that says "1 part" reads as a bug rather than as a rescue.
+function webSplitNote(web, settings, providerLabel = '') {
   if (web.chunks <= 1) return '';
+  const why = web.autoSplit ? ` — over ${providerLabel ? `${providerLabel}'s` : 'the'} message limit` : '';
   if (!settings.autoSubmit) return ` (✂️ ${web.chunks} parts — auto-submit off, only part 1 pasted)`;
-  return web.merged ? ` (✂️ ${web.chunks} parts + merge)` : ` (✂️ ${web.chunks} parts)`;
+  return ` (✂️ ${web.chunks} parts${why}${web.merged ? ' + merge' : ''})`;
 }
 
 // Even at maxParts the worst message can stay over the composer's cap. This is
@@ -774,7 +858,7 @@ async function runBatchCombined(jobs, settings) {
       }
       await chrome.tabs.create({ url: webUrl, active: true });
 
-      const splitNote = webSplitNote(web, settings);
+      const splitNote = webSplitNote(web, settings, providerLabel);
       const overflowNote = webOverflowNote(web, providerLabel);
       for (const r of fetched) await addToHistory(r.job.url, r.title);
       // Provisional until the content script reports back — see pasteReport.
@@ -783,7 +867,7 @@ async function runBatchCombined(jobs, settings) {
       if (willPaste) {
         await pasteWatchAdd(ids[0], {
           providerLabel, title, chunks: web.chunks, warn: '', overflowNote,
-          merged: web.merged, autoSubmit: !!settings.autoSubmit,
+          merged: web.merged, autoSplit: web.autoSplit, autoSubmit: !!settings.autoSubmit,
           jobIds: ids, combined: true
         });
       }

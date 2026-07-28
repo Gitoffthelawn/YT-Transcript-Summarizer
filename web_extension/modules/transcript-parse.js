@@ -30,47 +30,90 @@ function isNoise(line) {
 // Auto-generated tracks emit a rolling window: the same words are re-sent in the
 // following cue so the on-screen caption can grow. Joining them verbatim used to
 // duplicate large parts of the text; drop a cue that only repeats the previous one.
-function pushCue(lines, text) {
+//
+// `startMs` rides along so the rendered transcript can carry timestamps. It used
+// to be read (for coverage) and thrown away, which is why a summary could never
+// point at a moment in the video.
+function pushCue(cues, text, startMs) {
   const t = text.replace(/\s+/g, ' ').trim();
   if (!t || isNoise(t)) return;
-  const prev = lines[lines.length - 1];
-  if (prev === t) return;
-  if (prev && (prev.endsWith(t) || t.startsWith(prev)) && Math.abs(prev.length - t.length) < 3) {
-    lines[lines.length - 1] = t.length >= prev.length ? t : prev;
+  const prev = cues[cues.length - 1];
+  if (prev && prev.s === t) return;
+  if (prev && (prev.s.endsWith(t) || t.startsWith(prev.s)) && Math.abs(prev.s.length - t.length) < 3) {
+    // Keep the longer wording, but the EARLIER time: the cue started when the
+    // first fragment of it appeared, not when it finished growing.
+    if (t.length >= prev.s.length) prev.s = t;
     return;
   }
-  lines.push(t);
+  cues.push({ s: t, t: Number(startMs) || 0 });
+}
+
+// One marker per half-minute of video, not one per cue. Per-cue timestamps would
+// add ~120k characters to a two-hour transcript — eating exactly the composer
+// budget the split in §3.1 exists to protect — while these cost ~2.4k and are
+// still fine enough to point at a moment.
+const MARKER_INTERVAL_MS = 30000;
+
+/** `[m:ss]`, or `[h:mm:ss]` once the video is over an hour. */
+export function formatTimestamp(ms) {
+  const total = Math.max(0, Math.round(Number(ms) || 0) / 1000 | 0);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function render(cues) {
+  const out = [];
+  let nextMark = 0;
+  for (const c of cues) {
+    if (c.t >= nextMark) {
+      out.push(`[${formatTimestamp(c.t)}] ${c.s}`);
+      nextMark = c.t + MARKER_INTERVAL_MS;
+    } else {
+      out.push(c.s);
+    }
+  }
+  return out.join('\n');
+}
+
+// Does this transcript carry anchors the model can actually cite? The
+// get_transcript fallback returns bare cue text with no timings at all, so the
+// prompt must not promise timestamps that are not there.
+export function hasTimestamps(text) {
+  return /^\[\d{1,2}:\d{2}(?::\d{2})?\] /m.test(String(text || ''));
 }
 
 function parseJson3(text) {
   const json = JSON.parse(text); // caller catches
   const events = Array.isArray(json?.events) ? json.events : [];
   if (!events.length) return null;
-  const lines = [];
+  const cues = [];
   let endMs = 0;
   for (const e of events) {
     if (!Array.isArray(e.segs)) continue;
     const start = Number(e.tStartMs) || 0;
     const dur = Number(e.dDurationMs) || 0;
     endMs = Math.max(endMs, start + dur);
-    pushCue(lines, e.segs.map(s => s.utf8 || '').join(''));
+    pushCue(cues, e.segs.map(s => s.utf8 || '').join(''), start);
   }
-  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+  return cues.length ? { text: render(cues), endMs, cues: cues.length } : null;
 }
 
 // Legacy `?lang=xx` (no fmt) format: <text start="12.3" dur="4.5">…</text>
 function parseLegacyXml(text) {
   const matches = [...text.matchAll(/<text([^>]*)>([\s\S]*?)<\/text>/g)];
   if (!matches.length) return null;
-  const lines = [];
+  const cues = [];
   let endMs = 0;
   for (const m of matches) {
     const start = parseFloat(/\bstart="([\d.]+)"/.exec(m[1])?.[1] ?? '0') || 0;
     const dur = parseFloat(/\bdur="([\d.]+)"/.exec(m[1])?.[1] ?? '0') || 0;
     endMs = Math.max(endMs, (start + dur) * 1000);
-    pushCue(lines, decodeEntities(m[2].replace(/<[^>]+>/g, '')));
+    pushCue(cues, decodeEntities(m[2].replace(/<[^>]+>/g, '')), start * 1000);
   }
-  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+  return cues.length ? { text: render(cues), endMs, cues: cues.length } : null;
 }
 
 // srv3: <p t="12300" d="4500"><s>word</s><s> more</s></p>. The old code looked
@@ -79,7 +122,7 @@ function parseLegacyXml(text) {
 function parseSrv3(text) {
   const paragraphs = [...text.matchAll(/<p([^>]*)>([\s\S]*?)<\/p>/g)];
   if (!paragraphs.length) return null;
-  const lines = [];
+  const cues = [];
   let endMs = 0;
   for (const p of paragraphs) {
     const t = parseInt(/\bt="(\d+)"/.exec(p[1])?.[1] ?? '0', 10) || 0;
@@ -88,9 +131,9 @@ function parseSrv3(text) {
     const inner = p[2];
     const segs = [...inner.matchAll(/<s[^>]*>([\s\S]*?)<\/s>/g)];
     const raw = segs.length ? segs.map(s => s[1]).join('') : inner.replace(/<[^>]+>/g, '');
-    pushCue(lines, decodeEntities(raw));
+    pushCue(cues, decodeEntities(raw), t);
   }
-  return lines.length ? { text: lines.join('\n'), endMs, cues: lines.length } : null;
+  return cues.length ? { text: render(cues), endMs, cues: cues.length } : null;
 }
 
 /**

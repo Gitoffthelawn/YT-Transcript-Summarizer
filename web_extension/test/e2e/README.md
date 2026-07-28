@@ -57,6 +57,9 @@ Chrome e Firefox non condividono niente della ricetta qui sopra: su Gecko non es
 | `gecko-paste.html` | banco a tre editor che carica il **vero** `paste_common.js` | no |
 | `gecko-paste.mjs` | §8.1: esegue il banco su Firefox — ha trovato il bug O | **no** |
 | `chrome-paste.mjs` | la **stessa** pagina su Chrome headless: domanda di regressione | **no** |
+| `clear-retry.html` | §3.9: il retry che raddoppiava il messaggio. `ytsClearInput` sui tre editor veri, con il controllo che **senza** il clear il doppione c'è | no |
+| `clear-retry.mjs` | esegue il banco sopra; lancia da sé il browser. `node test/e2e/clear-retry.mjs [chrome\|firefox]` | **no** |
+| `upload-probe.mjs` | §4.4: allegare la trascrizione come **file** invece di incollarla. Cerca `input[type=file]` (shadow root inclusi), prova il drop simulato e `input.files = dt.files`. Profilo **persistente**: si fa login una volta. `node test/e2e/upload-probe.mjs [gemini\|anthropic\|openai]` | **no** |
 | `firefox-run.mjs` | §8.4: il giro a costo zero, `PROVIDER=gemini\|anthropic\|openai` | **no** |
 
 Avvio (l'estensione va caricata da `web-ext`, e `popup.html` **deve** essere aperta come

@@ -27,6 +27,10 @@ const EXCLUDE_DIRS = new Set([
 ]);
 const EXCLUDE_FILES = new Set([
   'NOTES.md',         // internal rationale notes (ex TESTING-TODO.md)
+  'ROADMAP.md',       // public on GitHub, which is where a roadmap is read —
+                      // inside the uploaded package it is dead weight, and it
+                      // describes what the extension does NOT do yet, which is
+                      // not what a store reviewer should be reading.
   'package.json', 'package-lock.json',
   // Unreferenced by the manifest and by every page — 400 KB of dead weight in
   // every upload. The store listing icon is uploaded separately, not from here.

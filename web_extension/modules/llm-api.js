@@ -94,8 +94,19 @@ export function splitTranscript(text, parts) {
  * truncates silently makes the user's choice actively harmful).
  * @returns {number} 1 when the transcript should be sent in a single request
  */
+/**
+ * The number of parts the USER asked for, clamped to the user-facing ceiling.
+ *
+ * Deliberately separate from what actually gets sent: an automatic raise (a
+ * composer that would truncate) and a deliberate split mean opposite things
+ * downstream — for the merge, and for what the status line owes the user.
+ */
+export function requestedChunkCount(settings) {
+  return Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
+}
+
 export function plannedChunkCount(transcript, settings) {
-  const asked = Math.max(1, Math.min(CONFIG.chunking.maxParts, Math.floor(settings?.chunkParts) || 1));
+  const asked = requestedChunkCount(settings);
   const len = String(transcript ?? '').length;
 
   // Each message also carries the prompt and the "part i of n" note, so the
@@ -173,6 +184,7 @@ function mergePlanFor(settings, count, lang, cap) {
  */
 export function buildChunkMessages(transcript, settings) {
   const lang = settings.transcriptLang || 'en';
+  const asked = requestedChunkCount(settings);
   const n = plannedChunkCount(transcript, settings);
   const cap = Math.floor(settings?.maxMessageChars) || 0;
   // Even at maxParts a very long video can stay over the composer's limit. The
@@ -181,16 +193,25 @@ export function buildChunkMessages(transcript, settings) {
 
   if (n === 1) {
     const parts = [`${settings.prompt}\n\n---\n\n${transcript}`];
-    return { parts, chunks: 1, merged: false, mergePlan: null, overflow: overflowOf(parts) };
+    return { parts, chunks: 1, asked, autoSplit: false, merged: false, mergePlan: null, overflow: overflowOf(parts) };
   }
 
   const slices = splitTranscript(transcript, n);
   const count = slices.length;
   const parts = slices.map((s, i) => `${chunkPrompt(settings.prompt, i + 1, count, lang)}\n\n---\n\n${s}`);
-  const merged = !!settings.chunkMerge;
+  // The split was forced by the composer's own limit, not chosen. The caller has
+  // to be able to say which of the two happened: "✂️ 7 parts" after the user
+  // picked "1 part" reads as a bug unless the reason travels with it.
+  const autoSplit = count > asked;
+  // Whoever asked for a single part asked for a SINGLE summary. Leaving them
+  // with N partial summaries and no whole one would answer a question nobody
+  // put — so the merge is not optional here, and the checkbox (hidden at
+  // "1 part", and therefore carrying whatever it happened to hold from an
+  // earlier setting) does not get a vote. It only governs a deliberate split.
+  const merged = asked === 1 ? true : !!settings.chunkMerge;
   if (merged) parts.push(mergeChatPrompt(count, lang));
   return {
-    parts, chunks: count, merged,
+    parts, chunks: count, asked, autoSplit, merged,
     mergePlan: merged ? mergePlanFor(settings, count, lang, cap) : null,
     overflow: overflowOf(parts)
   };

@@ -40,7 +40,26 @@ export function makeTranscript(chars) {
   ).join('\n') + '\n';
 }
 
+/**
+ * Swap the transcript the stubbed strategy returns, mid-file.
+ *
+ * `install()` can only run once per process — `registerHooks` compiles the stub
+ * module the first time it is asked for, and a second install() silently has no
+ * effect. A test that needs two different transcripts (with anchors and without,
+ * say) would then quietly assert twice about the same one. So the stub reads a
+ * global instead of a baked-in constant.
+ */
+export function setTranscript({ transcript, title, lang }) {
+  const cur = globalThis.__ytsStub || {};
+  globalThis.__ytsStub = {
+    transcript: transcript ?? cur.transcript,
+    title: title ?? cur.title,
+    lang: lang ?? cur.lang,
+  };
+}
+
 export function install({ transcript, title = 'Video di prova', lang = 'it' }) {
+  setTranscript({ transcript, title, lang });
   registerHooks({
     load(url, ctx, next) {
       if (url.endsWith('modules/youtube-api.js')) {
@@ -48,8 +67,9 @@ export function install({ transcript, title = 'Video di prova', lang = 'it' }) {
           format: 'module', shortCircuit: true,
           source: `
             export async function fetchViaGetTranscript() {
-              return { transcript: ${JSON.stringify(transcript)}, title: ${JSON.stringify(title)},
-                       coverage: '100%', complete: true, lang: ${JSON.stringify(lang)} };
+              const s = globalThis.__ytsStub;
+              return { transcript: s.transcript, title: s.title,
+                       coverage: '100%', complete: true, lang: s.lang };
             }
             export async function fetchViaAndroidPlayer() { return null; }
             export async function tabFetchTranscript() { return null; }
