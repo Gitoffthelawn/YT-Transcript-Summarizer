@@ -1,70 +1,70 @@
-# Driver E2E — pilotare l'estensione vera in Chrome
+# Driver E2E — driving the real extension in Chrome
 
-Nessuna dipendenza: Node 24 ha `WebSocket` globale, quindi bastano ~40 righe di
-client CDP (`cdp.mjs`). Puppeteer **non** serve. La ricetta completa, con le
-trappole, è in `TESTING-TODO.md` §6.
+No dependencies: Node 24 has a global `WebSocket`, so ~40 lines of a CDP
+client (`cdp.mjs`) are enough. Puppeteer is **not** needed. The full recipe, with
+the pitfalls, is in `TESTING-TODO.md` §6.
 
-## Avvio
+## Startup
 
 ```bash
-# 1. l'estensione va in un path CORTO e SENZA SPAZI
+# 1. the extension must live in a SHORT path with NO SPACES
 cp -r <repo>/* /c/Users/Admin/ytsx/
 
-# 2. Chrome con la porta di debug
+# 2. Chrome with the debug port
 "/c/Program Files/Google/Chrome/Application/chrome.exe" \
   --user-data-dir=C:/Users/Admin/ytsp --remote-debugging-port=9333 \
   --enable-unsafe-extension-debugging --no-first-run \
   --no-default-browser-check about:blank &
 
-# 3. caricare l'estensione via CDP (--load-extension viene IGNORATO)
+# 3. load the extension via CDP (--load-extension is IGNORED)
 node -e "import('./cdp.mjs').then(async m=>{const c=await m.connect(9333);
   console.log(await c.send('Extensions.loadUnpacked',{path:'C:/Users/Admin/ytsx'}));c.close()})"
 ```
 
-L'id che torna va in `EXT_ID` per tutti gli script sotto.
+The id returned goes into `EXT_ID` for all the scripts below.
 
-## Gli script
+## The scripts
 
-| file | a cosa serve | invia? |
+| file | what it does | does it send? |
 |---|---|---|
-| `cdp.mjs` | client CDP minimo: `connect()`, `send()`, `attach()`, `targets()` | — |
-| `drive.mjs` | apre `popup.html`, manda `startBatch`, fa polling dei job | — |
-| `long-video.mjs` | §7.5: split di un video da 4h/8h **veri**, senza aprire alcun provider | no |
-| `real-run.mjs` | il flusso supportato completo + screenshot del composer | **no** |
-| `claim-race.mjs` | §7.8: due tab insieme, lock a 60 s, TTL a 5 min | **no** |
-| `combined-live.mjs` | §4.7/§7.6: combined, un report → tutte le righe | **no** |
-| `paste-recorder.mjs` | registra ogni valore del composer da prima del content script | **no** |
-| `merge-quality.mjs` | §1.2: run di merge completo; dice se i parziali sono stati reincollati e misura quanto di ciascuno sopravvive nel merge. `PROVIDER=gemini\|anthropic\|openai` | **SÌ** |
-| `test-merge.mjs` | run completo 4 parti + merge, solo meccanica (senza le risposte) | **SÌ** |
-| `merge-run-2026-07-27.txt` | le 5 risposte del run che ha trovato il §4.4 — prova, non script | — |
-| `merge-run-2026-07-27-inlined.txt` | le 5 risposte dello stesso run **col fix K**: il prima/dopo del §4.4-ter | — |
-| `merge-run-2026-07-28-claude.txt` | le 3 risposte del run su Claude, fix K confermato su un secondo provider | — |
-| `merge-run-2026-07-28-chatgpt.txt` | i due parziali su ChatGPT (estratti dal messaggio di merge) e la fusione finale, dopo i fix M e N | — |
-| `wait-report.mjs` | aspetta la fine di una sequenza e stampa il verdetto vero | — |
-| `peek-all.mjs` | ispeziona tutte le tab Gemini: turni inviati, composer, busy | — |
-| `measure-cap.mjs` | misura il cap del composer di un provider | no |
-| `gemini-drop.mjs` | prova l'allegato via drop simulato (4-bis, esito negativo) | no |
+| `cdp.mjs` | minimal CDP client: `connect()`, `send()`, `attach()`, `targets()` | — |
+| `drive.mjs` | opens `popup.html`, sends `startBatch`, polls the jobs | — |
+| `long-video.mjs` | §7.5: splits a **real** 4h/8h video, without opening any provider | no |
+| `real-run.mjs` | the full supported flow + composer screenshot | **no** |
+| `claim-race.mjs` | §7.8: two tabs together, 60 s lock, 5 min TTL | **no** |
+| `combined-live.mjs` | §4.7/§7.6: combined, one report → all rows | **no** |
+| `paste-recorder.mjs` | records every value of the composer from before the content script | **no** |
+| `merge-quality.mjs` | §1.2: full merge run; tells whether the partials were pasted back and measures how much of each survives in the merge. `PROVIDER=gemini\|anthropic\|openai` | **YES** |
+| `test-merge.mjs` | full 4-part + merge run, mechanics only (without the answers) | **YES** |
+| `merge-run-2026-07-27.txt` | the 5 answers from the run that found §4.4 — evidence, not a script | — |
+| `merge-run-2026-07-27-inlined.txt` | the 5 answers from the same run **with fix K**: the before/after of §4.4-ter | — |
+| `merge-run-2026-07-28-claude.txt` | the 3 answers from the Claude run, fix K confirmed on a second provider | — |
+| `merge-run-2026-07-28-chatgpt.txt` | the two partials on ChatGPT (extracted from the merge message) and the final fusion, after fixes M and N | — |
+| `wait-report.mjs` | waits for a sequence to finish and prints the real verdict | — |
+| `peek-all.mjs` | inspects all Gemini tabs: turns sent, composer, busy | — |
+| `measure-cap.mjs` | measures a provider's composer cap | no |
+| `gemini-drop.mjs` | tries the attachment via simulated drop (4-bis, negative outcome) | no |
 
-### Firefox (§8) — è il browser su cui si pubblica
+### Firefox (§8) — the browser it's published on
 
-Chrome e Firefox non condividono niente della ricetta qui sopra: su Gecko non esistono
-`Extensions.loadUnpacked` né il socket browser di CDP. Il protocollo è **WebDriver BiDi**.
+Chrome and Firefox share nothing of the recipe above: on Gecko there is neither
+`Extensions.loadUnpacked` nor the CDP browser socket. The protocol is **WebDriver BiDi**.
 
-| file | a cosa serve | invia? |
+| file | what it does | does it send? |
 |---|---|---|
-| `bidi.mjs` | client BiDi minimo — il gemello di `cdp.mjs`; include il server statico | — |
-| `drive-gecko.mjs` | il gemello di `drive.mjs`: trova `popup.html`, manda `startBatch` | — |
-| `gecko-paste.html` | banco a tre editor che carica il **vero** `paste_common.js` | no |
-| `gecko-paste.mjs` | §8.1: esegue il banco su Firefox — ha trovato il bug O | **no** |
-| `chrome-paste.mjs` | la **stessa** pagina su Chrome headless: domanda di regressione | **no** |
-| `clear-retry.html` | §3.9: il retry che raddoppiava il messaggio. `ytsClearInput` sui tre editor veri, con il controllo che **senza** il clear il doppione c'è | no |
-| `clear-retry.mjs` | esegue il banco sopra; lancia da sé il browser. `node test/e2e/clear-retry.mjs [chrome\|firefox]` | **no** |
-| `upload-probe.mjs` | §4.4: allegare la trascrizione come **file** invece di incollarla. Cerca `input[type=file]` (shadow root inclusi), prova il drop simulato e `input.files = dt.files`. Profilo **persistente**: si fa login una volta. `node test/e2e/upload-probe.mjs [gemini\|anthropic\|openai]` | **no** |
-| `firefox-live.mjs` | **il giro dal vivo da usare oggi**: run vero dell'estensione vera in Firefox, senza passare dalla popup. `node test/e2e/firefox-live.mjs [gemini\|anthropic\|openai]`, `SUBMIT=1` per lo split forzato | **no** |
-| `firefox-run.mjs` | §8.4: il giro a costo zero via popup. ⚠️ **non funziona più da Firefox 153** — vedi sotto; sostituito da `firefox-live.mjs` | **no** |
+| `bidi.mjs` | minimal BiDi client — the twin of `cdp.mjs`; includes the static server | — |
+| `drive-gecko.mjs` | the twin of `drive.mjs`: finds `popup.html`, sends `startBatch` | — |
+| `gecko-paste.html` | a three-editor test bench that loads the **real** `paste_common.js` | no |
+| `gecko-paste.mjs` | §8.1: runs the bench on Firefox — found bug O | **no** |
+| `chrome-paste.mjs` | the **same** page on headless Chrome: regression check | **no** |
+| `clear-retry.html` | §3.9: the retry that doubled the message. `ytsClearInput` on the three real editors, with a control check that **without** the clear the duplicate is there | no |
+| `clear-retry.mjs` | runs the bench above; launches the browser itself. `node test/e2e/clear-retry.mjs [chrome\|firefox]` | **no** |
+| `upload-probe.mjs` | §4.4: attaching the transcript as a **file** instead of pasting it. Looks for `input[type=file]` (shadow roots included), tries a simulated drop and `input.files = dt.files`. **Persistent** profile: log in once. `node test/e2e/upload-probe.mjs [gemini\|anthropic\|openai]` | **no** |
+| `firefox-live.mjs` | **the live run to use today**: a real run of the real extension in Firefox, without going through the popup. `node test/e2e/firefox-live.mjs [gemini\|anthropic\|openai]`, `SUBMIT=1` for the forced split | **no** |
+| `firefox-run.mjs` | §8.4: the zero-cost run via popup. ⚠️ **no longer works since Firefox 153** — see below; replaced by `firefox-live.mjs` | **no** |
 
-Avvio (l'estensione va caricata da `web-ext`, e `popup.html` **deve** essere aperta come
-start-url: BiDi si rifiuta di *navigare* verso `moz-extension://`):
+Startup (the extension must be loaded via `web-ext`, and `popup.html` **must** be opened as the
+start-url: BiDi refuses to *navigate* to `moz-extension://`):
 
 ```
 web-ext run --source-dir C:\Users\Admin\ytsfx --firefox-profile C:\Users\Admin\ytsff \
@@ -74,56 +74,56 @@ web-ext run --source-dir C:\Users\Admin\ytsfx --firefox-profile C:\Users\Admin\y
 EXT_UUID=<uuid> PROVIDER=anthropic node test/e2e/firefox-run.mjs
 ```
 
-L'`<uuid>` è quello **interno al profilo**, non l'id del manifest: sta in `prefs.js`
-sotto `extensions.webextensions.uuids`.
+The `<uuid>` is the one **internal to the profile**, not the manifest id: it lives in `prefs.js`
+under `extensions.webextensions.uuids`.
 
-⚠️ **Da Firefox 153 questa ricetta non funziona più** (verificato il 2026-07-28). Il
-`--start-url moz-extension://…` **non apre più** la popup, e BiDi continua a rifiutarsi di
-navigarci (`Navigation to "moz-extension://…" is not allowed`): `browsingContext.getTree`
-riporta solo un `chrome://browser/content/blanktab.html` e non c'è modo di entrare. Provati
-e falliti anche `browser.startup.homepage` sul profilo (web-ext apre comunque una tab vuota)
-e la navigazione diretta via BiDi.
+⚠️ **This recipe no longer works from Firefox 153 onward** (verified on 2026-07-28). The
+`--start-url moz-extension://…` **no longer opens** the popup, and BiDi keeps refusing to
+navigate there (`Navigation to "moz-extension://…" is not allowed`): `browsingContext.getTree`
+only reports a `chrome://browser/content/blanktab.html` and there's no way in. Also tried
+and failed: `browser.startup.homepage` on the profile (web-ext opens an empty tab anyway)
+and direct navigation via BiDi.
 
-**La via che funziona è `firefox-live.mjs`**: invece di pilotare la popup da fuori, innesta
-poche righe in una **copia usa-e-getta** dell'estensione che fanno partire il run **da dentro
-il background** — dove le API dell'estensione già ci sono — e riferiscono su HTTP a un
-collettore locale. Niente di privilegiato da raggiungere, e il repo non viene toccato.
+**The approach that works is `firefox-live.mjs`**: instead of driving the popup from outside, it
+injects a few lines into a **throwaway copy** of the extension that kick off the run **from inside
+the background** — where the extension APIs already exist — and report over HTTP to a
+local collector. Nothing privileged to reach, and the repo isn't touched.
 
-**Tre trappole già pagate.** BiDi ammette **una sola sessione per browser**: senza
-`session.end` il run dopo muore con `Maximum number of active sessions` — e uno script che
-va in errore **la lascia aperta**, quindi tocca riavviare Firefox. `web-ext` non si attacca
-a un profilo senza `devtools.debugger.remote-enabled` in `user.js`. E in Git Bash i percorsi
-`C:\...` vengono riscritti: usare gli slash normali o `MSYS_NO_PATHCONV=1`, altrimenti
-web-ext cerca l'estensione in `C:\ytsfx\ytsfx`.
+**Three pitfalls already paid for.** BiDi allows **only one session per browser**: without
+`session.end` the next run dies with `Maximum number of active sessions` — and a script that
+errors out **leaves it open**, so Firefox has to be restarted. `web-ext` won't attach
+to a profile without `devtools.debugger.remote-enabled` in `user.js`. And in Git Bash
+`C:\...` paths get rewritten: use regular slashes or `MSYS_NO_PATHCONV=1`, otherwise
+web-ext looks for the extension at `C:\ytsfx\ytsfx`.
 
-**Il trucco che rende quasi tutto gratuito:** con `autoSubmit: false` il content
-script incolla la parte 1 e si ferma. Claim, TTL, split, riga di stato, `pasteWatch`,
-propagazione di `jobIds` e verdetto finale sono tutti esercitati per intero — ma
-nessun messaggio parte, quindi non si consuma quota.
+**The trick that makes almost everything free:** with `autoSubmit: false` the content
+script pastes part 1 and stops. Claim, TTL, split, status line, `pasteWatch`,
+`jobIds` propagation, and the final verdict are all fully exercised — but
+no message ever goes out, so no quota is consumed.
 
-**Gli unici due che inviano davvero** sono `merge-quality.mjs` e `test-merge.mjs`
-(auto-submit ON): 5 messaggi sull'account dell'utente, ~3 minuti. Da concordare prima.
-Per la domanda ancora aperta usare `merge-quality.mjs`, che è l'unico a salvare il
-**contenuto** delle risposte — che è ciò che va giudicato (TESTING-TODO §1.2).
+**The only two that actually send** are `merge-quality.mjs` and `test-merge.mjs`
+(auto-submit ON): 5 messages on the user's account, ~3 minutes. Must be agreed on beforehand.
+For the still-open question use `merge-quality.mjs`, the only one that saves the
+**content** of the answers — which is what needs to be judged (TESTING-TODO §1.2).
 
-## Trappole che costano tempo
+## Time-costly pitfalls
 
-- **Aprire le tab in background falsa i risultati.** L'estensione usa
-  `chrome.tabs.create({ active: true })`. In una tab di background Chrome differisce
-  il layout e limita i timer, e `ytsWaitForInput` pretende un elemento **visibile**:
-  il paste non avviene mai. Con `Target.createTarget({ background: true })` questo
-  test riportava fallimenti che il flusso vero non ha. Usare `background: false`.
-- **Non seminare payload minuscoli.** Un testo di poche decine di caratteri si
-  incolla e si esaurisce così in fretta da correre contro il boot di Angular, e il
-  risultato è instabile. Usare una taglia realistica (~25k), che è anche l'unica che
-  l'utente vede davvero.
-- **Leggere `.ql-editor` e basta non basta più.** Con la UI ridisegnata di Gemini
-  (2026-07-27) i candidati sono più di uno e quello pieno non è il primo: leggerli
-  tutti e prendere il più lungo.
+- **Opening tabs in the background skews the results.** The extension uses
+  `chrome.tabs.create({ active: true })`. In a background tab Chrome defers
+  layout and throttles timers, and `ytsWaitForInput` requires a **visible**
+  element: the paste never happens. With `Target.createTarget({ background: true })` this
+  test reported failures that the real flow doesn't have. Use `background: false`.
+- **Don't seed tiny payloads.** A text of a few dozen characters gets
+  pasted and finishes so fast it races against Angular's boot, and the
+  result is flaky. Use a realistic size (~25k), which is also the only one
+  the user actually sees.
+- **Reading `.ql-editor` alone is no longer enough.** With Gemini's redesigned UI
+  (2026-07-27) there is more than one candidate and the full one isn't the first: read
+  them all and take the longest.
 
-- **Mai `| tail`** su un run lungo: la pipe bufferizza e sembra piantato. Redirigere
-  su file (`> run.log 2>&1`) e leggere quello.
-- `measure-cap.mjs` si aspetta gli appunti **già pieni** dall'esterno
-  (`Set-Clipboard` da PowerShell): `navigator.clipboard.writeText()` fallisce con
-  `NotAllowedError` se la finestra non ha il focus, cosa che in automazione non ha
-  mai.
+- **Never `| tail`** on a long run: the pipe buffers and it looks stuck. Redirect
+  to a file (`> run.log 2>&1`) and read that.
+- `measure-cap.mjs` expects the clipboard to be **already filled** from outside
+  (`Set-Clipboard` from PowerShell): `navigator.clipboard.writeText()` fails with
+  `NotAllowedError` if the window doesn't have focus, which in automation it
+  never does.
