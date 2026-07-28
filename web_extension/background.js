@@ -820,7 +820,15 @@ async function runBatchCombined(jobs, settings) {
     `\n${r.transcript}`
   ).join('\n\n---\n\n');
 
-  const combinedContent = `${settings.prompt}\n\n---\n\n${combinedTranscript}`;
+  // Same gate as the single-video path (§ processJob): only promise citations
+  // when at least one video actually carries anchors, and only when the user
+  // has not opted out via the Timestamps chip.
+  const timed = hasTimestamps(combinedTranscript) && settings.includeTimestamps !== false;
+  const settingsTs = timed
+    ? { ...settings, prompt: `${settings.prompt}\n\n${timestampNote(settings.transcriptLang || 'en')}` }
+    : settings;
+
+  const combinedContent = `${settingsTs.prompt}\n\n---\n\n${combinedTranscript}`;
   const mode = settings.mode || 'web';
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
@@ -845,7 +853,7 @@ async function runBatchCombined(jobs, settings) {
       // Combined is the case with the MOST text of all, so it is the one the
       // composer cap truncates hardest — it needs the same treatment as the
       // single-video branch, not the old unbounded split.
-      const web = buildChunkMessages(combinedTranscript, webChunkSettings(settings, provider, settings.autoSubmit));
+      const web = buildChunkMessages(combinedTranscript, webChunkSettings(settingsTs, provider, settings.autoSubmit));
       await downloadText(combinedContent, `combined_transcripts_${stamp}.txt`);
 
       const ids = fetched.map(r => r.job.id);
@@ -877,7 +885,7 @@ async function runBatchCombined(jobs, settings) {
 
     const ids = fetched.map(r => r.job.id);
     await updateJobStatus(ids, 'active', `🤖 Sending combined to ${settings.provider || 'anthropic'} API...`);
-    const llm = await summarizeTranscript(combinedTranscript, settings, ids, (m) => console.log('[combined]', m), '🤖 Combined');
+    const llm = await summarizeTranscript(combinedTranscript, settingsTs, ids, (m) => console.log('[combined]', m), '🤖 Combined');
     const titles = fetched.map(r => r.title || r.videoId).join(' + ');
     const notes = [];
     if (llm.truncated) {
